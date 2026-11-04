@@ -3,8 +3,9 @@ name: publish
 # Publishes on a version bump, with no token: npm authenticates the run itself through
 # GitHub's OIDC provider (trusted publishing), which is what `id-token: write` mints.
 # Only the publish job may mint it: the quality gate installs and runs dependency code.
-# That job runs in the `npm` environment, which only `main` may deploy to and which the
-# trusted publisher names, so a dispatch on any other branch can't publish.
+# That job runs in the `npm` environment, which the trusted publisher names. Restricted to
+# `main` in the repo's settings (a manual step, possible once the repo is public), it stops
+# a dispatch on any other branch from publishing.
 # The trusted publisher registered on npmjs.com names this file, so renaming it breaks
 # publishing until the npm side is updated to match.
 on:

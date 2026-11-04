@@ -32,3 +32,5 @@ Use Bun 1.4.2 (`bun x bun@1.4.2 install --frozen-lockfile`). Run `bun run lint`,
 ## Publishing
 
 The package publishes to npm automatically when `version` in `package.json` changes on `main`: `.github/workflows/publish.yml` publishes that exact version through npm trusted publishing (GitHub OIDC, no token). Never run `npm publish` by hand, and never rename `publish.yml`, which the trusted publisher on npmjs.com names. A merge without a version change publishes nothing. The one exception was 0.1.0, published once by hand to create the package, because npm attaches a trusted publisher only to a package that already exists; don't take it as precedent.
+
+The publish job runs in the GitHub environment `npm`, which the trusted publisher on npmjs.com names. Its deployment branches must be limited to `main` in the repo's settings, or anyone who can push a branch can dispatch `publish.yml` from it and publish. That rule lives only in GitHub's settings, not in this repo: if the environment is ever recreated, restrict it again before the next version bump merges.
