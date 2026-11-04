@@ -560,9 +560,7 @@ export class VaultSession {
     this.written.set(id, line);
   }
   /** `revisionDigest`, cached for current rows; a history row shares its item's id, so it is never cached. */
-  private async digestOf(
-    row: Pick<StoredRevision, "id" | "revision" | "envelope" | "chunkHashes">,
-  ): Promise<string> {
+  private async digestOf(row: StoredRevision): Promise<string> {
     const ciphertext = row.envelope.ciphertext;
     const cached = this.digests.get(row.id);
     if (cached?.ciphertext === ciphertext) return cached.digest;
@@ -1087,7 +1085,7 @@ export class VaultSession {
     prospective: VaultItem[],
     changed: VaultItem[],
     vouched: ReadonlyMap<string, boolean>,
-  ): Promise<Map<string, Omit<StoredRevision, "sequence">>> {
+  ): Promise<Map<string, RevisionBase>> {
     const generation = this.generation;
     paths(prospective);
     const byId = new Map(baseline.map((item) => [item.id, item]));
@@ -1112,6 +1110,7 @@ export class VaultSession {
             baseCid: previous?.baseCid ?? null,
             recordType: previous?.recordType,
           },
+          digest: await revisionDigest(prepared),
         };
       }),
     );
@@ -1151,7 +1150,12 @@ export class VaultSession {
           throw new Error("Vault locked");
       },
     );
-    return new Map(encrypted.map(({ item, prepared }) => [item.id, prepared]));
+    return new Map(
+      encrypted.map(({ item, prepared, digest }) => [
+        item.id,
+        { revision: prepared.revision, digest },
+      ]),
+    );
   }
   /**
    * Reads need a sound graph, so a repair rewrites even code another admin
@@ -1335,10 +1339,8 @@ export class VaultSession {
     await this.writeNote(id, path, "", "create");
     return id;
   }
-  /** The revision and digest of a row as stored, to name it as a later save's base. */
-  private async baseOf(
-    row: Pick<StoredRevision, "id" | "revision" | "envelope" | "chunkHashes">,
-  ): Promise<RevisionBase> {
+  /** The revision and digest of a stored row, to name it as a later save's base. */
+  private async baseOf(row: StoredRevision): Promise<RevisionBase> {
     return { revision: row.revision, digest: await this.digestOf(row) };
   }
   async rename(id: string, path: string): Promise<void> {
@@ -1422,7 +1424,7 @@ export class VaultSession {
         if (!row) throw new Error("Missing written note");
         this.wrote(id, base?.revision, row.revision);
         this.reportTrustLoss(lost);
-        return this.baseOf(row);
+        return row;
       }
     }
     const decoded = await Promise.all(baseline.map((item) => this.read(item)));
@@ -1542,7 +1544,7 @@ export class VaultSession {
     if (!row) throw new Error("Missing written note");
     this.wrote(id, base?.revision, row.revision);
     this.reportTrustLoss(lost);
-    return viewedBase && !base ? viewedBase : this.baseOf(row);
+    return viewedBase && !base ? viewedBase : row;
   }
   /**
    * After a typed save that wrote nothing, the revision the caller's view
