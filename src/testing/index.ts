@@ -16,7 +16,9 @@ import {
   unlockVault,
 } from "../app/unlock.ts";
 import {
+  nextSequence,
   passkeyAdmin,
+  recipientsOf,
   seedRecipientFromKeys,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
@@ -29,6 +31,7 @@ import {
 import type { LinkPrompt } from "../device/client.ts";
 import {
   AuthVaultTransport,
+  readVerifiedVaultRoot,
   type VaultOperation,
   type VaultRecordV2,
   type VaultTransportRpc,
@@ -347,6 +350,52 @@ export async function openAdminVault(
   });
   if (!runtime) throw new Error("Vault locked");
   return runtime;
+}
+
+/**
+ * The admin re-signs access listing every admin but no device or agent, and
+ * republishes the vault's notes under it, so each linked device loses its
+ * slot: its next open throws `AccessRemovedError` and a running one locks
+ * on its next sync. A real removal also re-keys the vault and revokes the
+ * device's tokens; call `flowId.revokeAll()` for the second.
+ */
+export async function dropDevices(admin: AdminBrowser): Promise<void> {
+  const current = admin.note.record();
+  if (!current) throw new Error("Missing vault");
+  const { manifest, metadata } = await readVerifiedVaultRoot(
+    admin.key,
+    did,
+    current.value,
+  );
+  const reader = new AuthVaultTransport(admin.note.browserRpc, {
+    key: admin.key,
+    did,
+    ...admin.state,
+  });
+  const snapshot = await reader.readSnapshot();
+  reader.stop();
+  if (!snapshot) throw new Error("Missing vault");
+  const state = await signedState(
+    admin.key,
+    { did, vault: manifest.vault, epoch: manifest.epoch },
+    {
+      kind: "change",
+      sequence: nextSequence(metadata, null),
+      recipients: recipientsOf(metadata).filter(
+        (recipient) => recipient.role === "admin",
+      ),
+      signer: admin.admin,
+    },
+    "created",
+  );
+  const writer = new AuthVaultTransport(admin.note.browserRpc, {
+    key: admin.key,
+    did,
+    ...state,
+  });
+  await writer.writeSnapshot(snapshot.entries, snapshot.cid);
+  writer.stop();
+  await admin.port.saveCheckpoint(savedCheckpoint(state));
 }
 
 /** A credential or checkpoint store in memory, as a plugin's keychain would hold it. */

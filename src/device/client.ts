@@ -8,7 +8,6 @@ import {
   NoteTransportError,
   pollNoteDeviceToken,
 } from "@flow-industries/id";
-import Dexie from "dexie";
 import sodium from "libsodium-wrappers-sumo";
 import { z } from "zod";
 import type { NoteView, StrandedEdits, SyncListener } from "../app/runtime.ts";
@@ -47,6 +46,12 @@ import type {
   TrustLoss,
   VaultSession,
 } from "../vault/session.ts";
+import {
+  deleteVaultDatabase,
+  StaleWriteError,
+  type VaultStorage,
+  vaultDatabaseNames,
+} from "../vault/storage.ts";
 import type { ComposeRequest } from "../writing/composer.ts";
 import { isInternalWritingPath } from "../writing/preferences.ts";
 
@@ -77,6 +82,11 @@ export interface DeviceOptions {
    * the access list, where an unverified link shows as approved but not added.
    */
   onRemoved?(reason: "removed" | "revoked" | "unverified"): Promise<void>;
+  /**
+   * The IndexedDB this device's local databases live in, for a test or an
+   * app that brings its own; Dexie's default otherwise.
+   */
+  indexedDB?: VaultStorage["indexedDB"];
 }
 /** What the device shows while the user approves it in a browser. */
 export interface LinkPrompt {
@@ -103,6 +113,16 @@ export type DeviceNote = Pick<
   NoteView,
   "id" | "path" | "source" | "revision" | "digest"
 >;
+/**
+ * `current`: compare-and-swap. The write is refused with `NoteChangedError`
+ * unless its `revision` and `digest` name the stored revision itself. Without
+ * it, a base this device can place on an older revision is an edit of that
+ * revision, and the write replaces whatever landed since, such as another
+ * device's edit a sync brought in after the caller read.
+ */
+export interface WriteOptions {
+  current?: boolean;
+}
 /** An attachment as `DeviceVault.listAttachments` lists it: everything but its bytes. */
 export type DeviceAttachment = AssetSummary;
 /** An attachment to save; an existing one's `revision` and `digest` name the revision the device's copy came from. */
@@ -135,7 +155,7 @@ export interface DeviceVault {
    * revision: read the note again to see the text it kept. An existing note
    * saved without a revision this device can place throws `NoteChangedError`.
    */
-  saveNote(note: DeviceNote): Promise<RevisionBase>;
+  saveNote(note: DeviceNote, options?: WriteOptions): Promise<RevisionBase>;
   /** Every attachment outside the trash, without its bytes. */
   listAttachments(): Promise<DeviceAttachment[]>;
   /** An attachment's bytes, as a copy the caller may zero. */
@@ -147,15 +167,19 @@ export interface DeviceVault {
    * attachment saved without a revision this device can place throws
    * `NoteChangedError`. Paths ending in `.md` or `.mdx` are notes.
    */
-  saveAttachment(attachment: DeviceAttachmentWrite): Promise<RevisionBase>;
+  saveAttachment(
+    attachment: DeviceAttachmentWrite,
+    options?: WriteOptions,
+  ): Promise<RevisionBase>;
   /**
    * Moves a note or an attachment and resolves with its new revision. A
    * note's move rewrites the links to it; an attachment's leaves them as
-   * written, so save the notes that link to it.
+   * written, so save the notes that link to it. With `base`, it is refused
+   * with `NoteChangedError` unless `base` names the stored revision.
    */
-  rename(id: string, path: string): Promise<RevisionBase>;
-  /** Moves a note or an attachment to the trash. */
-  remove(id: string): Promise<void>;
+  rename(id: string, path: string, base?: RevisionBase): Promise<RevisionBase>;
+  /** Moves a note or an attachment to the trash; with `base`, only while it names the stored revision. */
+  remove(id: string, base?: RevisionBase): Promise<void>;
   compose(request: ComposeRequest): Promise<{ selectedId: string }>;
   /** Writes sync on their own; this syncs now. */
   sync(): Promise<void>;
@@ -175,11 +199,24 @@ export interface DeviceVault {
  * device is unlinked; it never touches the PDS or another seed's databases,
  * which `openDeviceVault` names by each seed's recipient id.
  */
-export async function deleteDeviceStorage(seed: Uint8Array): Promise<void> {
-  const suffix = `#${(await createSeedRecipient(seed, "device")).id}`;
-  for (const name of await Dexie.getDatabaseNames())
-    if (name.startsWith("flow-note:") && name.endsWith(suffix))
-      await Dexie.delete(name);
+export async function deleteDeviceStorage(
+  seed: Uint8Array,
+  options: Pick<DeviceOptions, "indexedDB"> = {},
+): Promise<void> {
+  const storage = await deviceStorage(seed, options);
+  const suffix = `#${storage.namespace}`;
+  for (const name of await vaultDatabaseNames(storage))
+    if (name.endsWith(suffix)) await deleteVaultDatabase(name, storage);
+}
+/** A seed's own databases, named by its recipient id; passkey sessions never carry one. */
+async function deviceStorage(
+  seed: Uint8Array,
+  options: Pick<DeviceOptions, "indexedDB">,
+): Promise<VaultStorage & { namespace: string }> {
+  return {
+    namespace: (await createSeedRecipient(seed, "device")).id,
+    ...(options.indexedDB && { indexedDB: options.indexedDB }),
+  };
 }
 /**
  * A save named no revision of an existing note that this device can place,
@@ -550,7 +587,7 @@ export async function openDeviceVault(
       await options.onRemoved?.(reason);
     },
     runners,
-    storage: own.id,
+    storage: await deviceStorage(seed, options),
     runtime(session, key, state) {
       const transport = new AuthVaultTransport(rpc, {
         key,
@@ -574,6 +611,20 @@ export async function openDeviceVault(
   return stranded ? { ...vault, stranded } : vault;
 }
 
+const baseOf = (
+  { revision, digest }: { revision?: string; digest?: string },
+  { current }: WriteOptions,
+) => (revision && digest ? { revision, digest, current } : undefined);
+/** A compare-and-swap write that lost its race reads, to the caller, as any other changed note. */
+async function swapped<T>(current: boolean, write: () => Promise<T>) {
+  try {
+    return await write();
+  } catch (error) {
+    if (current && error instanceof StaleWriteError)
+      throw new NoteChangedError();
+    throw error;
+  }
+}
 /** Only these closures leave the client: the session, its keys and the transport stay behind them. */
 function sessionVault(
   session: VaultSession,
@@ -583,30 +634,37 @@ function sessionVault(
   let stopped = false;
   return {
     read: () => runtime.read(),
-    async saveNote(note) {
+    async saveNote(note, options = {}) {
       if (stopped) throw new Error("Vault locked");
       if (isInternalWritingPath(note.path))
         throw new Error("This path is reserved for vault preferences.");
-      const { revision, digest } = note;
-      const base = revision && digest ? { revision, digest } : undefined;
+      const base = baseOf(note, options);
       if (!(await session.places(note.id, base))) throw new NoteChangedError();
-      return session.saveNote(note.id, note.path, note.source, undefined, base);
+      return swapped(!!base?.current, () =>
+        session.saveNote(note.id, note.path, note.source, undefined, base),
+      );
     },
     listAttachments: () => session.listAssets(),
     readAttachment: (id) => session.openAsset(id),
-    async saveAttachment({ id, path, bytes, mime, revision, digest }) {
+    async saveAttachment(attachment, options = {}) {
       if (stopped) throw new Error("Vault locked");
-      const base = revision && digest ? { revision, digest } : undefined;
+      const { id, path, bytes, mime } = attachment;
+      const base = baseOf(attachment, options);
       if (!(await session.places(id, base))) throw new NoteChangedError();
-      return session.saveAsset(id, path, bytes, base, mime);
+      return swapped(!!base?.current, () =>
+        session.saveAsset(id, path, bytes, base, mime),
+      );
     },
-    async rename(id, path) {
+    async rename(id, path, base) {
       if (stopped) throw new Error("Vault locked");
       if (isInternalWritingPath(path))
         throw new Error("This path is reserved for vault preferences.");
-      return session.rename(id, path);
+      return swapped(!!base, () => session.rename(id, path, base));
     },
-    remove: (id) => runtime.remove(id),
+    async remove(id, base) {
+      if (stopped) throw new Error("Vault locked");
+      await swapped(!!base, () => session.remove(id, undefined, base));
+    },
     compose: (request) => runtime.compose(request),
     sync: () => runtime.sync(),
     subscribe: (listener) => runtime.subscribe(listener),

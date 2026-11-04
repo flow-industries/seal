@@ -49,8 +49,10 @@ import {
 } from "./model.ts";
 import {
   revisionDigest,
+  StaleWriteError,
   type StoredRevision,
   VaultDatabase,
+  type VaultStorage,
 } from "./storage.ts";
 
 interface PathPlan {
@@ -107,8 +109,8 @@ export interface SessionOptions extends SessionServices {
   vault: string;
   key: Uint8Array;
   epoch?: number;
-  /** Separates this holder's local database from others for the same vault on one origin (`databaseName`). */
-  storage?: string;
+  /** Where this holder's local database lives; passkey sessions leave it unset. */
+  storage?: VaultStorage;
   /**
    * Who signs this session's writes, which recipients verify signatures and
    * whose admin signatures run by themselves (the unlock decides, knowing how
@@ -144,6 +146,12 @@ export interface RevisionBase {
   revision: string;
   digest: string;
 }
+/**
+ * A base a write must still be current on: compare-and-swap. Without
+ * `current`, a base the session can place on an older row is a change made
+ * on that row, and the write replaces whatever landed since.
+ */
+export type WriteBase = RevisionBase & { current?: boolean };
 /**
  * One exact stored revision of an item, as the person was shown it: its
  * `revisionDigest`, which binds the ciphertext, since a revision id alone
@@ -1202,7 +1210,7 @@ export class VaultSession {
               byId.get(item.id)?.revision !== item.revision,
           )
         )
-          throw new Error("Concurrent local path edit");
+          throw new StaleWriteError("Concurrent local path edit");
         for (const update of encrypted) {
           if (!this.key || generation !== this.generation)
             throw new Error("Vault locked");
@@ -1413,12 +1421,32 @@ export class VaultSession {
   private async baseOf(row: StoredRevision): Promise<RevisionBase> {
     return { revision: row.revision, digest: await this.digestOf(row) };
   }
-  /** Moves a note, repairing links to it, or an attachment, whose links stay as written. */
-  async rename(id: string, path: string): Promise<RevisionBase> {
+  /**
+   * Moves a note, repairing links to it, or an attachment, whose links stay
+   * as written. `base`, when given, must name the stored row.
+   */
+  async rename(
+    id: string,
+    path: string,
+    base?: RevisionBase,
+  ): Promise<RevisionBase> {
+    const current = base && { ...base, current: true };
     const stored = await this.database.items.get(id);
     if (stored && (await this.read(stored, false)).kind === "asset")
-      return this.writeAsset(id, path, undefined);
-    return this.writeNote(id, path, undefined, "rename");
+      return this.writeAsset(id, path, undefined, current);
+    return this.writeNote(id, path, undefined, "rename", undefined, current);
+  }
+  /** Refuses a write planned on any row but the stored one, because another holder's edit may have landed since. */
+  private async assertCurrent(
+    stored: StoredRevision | undefined,
+    base: RevisionBase,
+  ): Promise<void> {
+    if (
+      !stored ||
+      stored.revision !== base.revision ||
+      (await this.digestOf(stored)) !== base.digest
+    )
+      throw new StaleWriteError("This note changed. Read it again.");
   }
   /**
    * Writes an attachment's bytes at `path`, as `saveNote` writes a note's
@@ -1431,7 +1459,7 @@ export class VaultSession {
     id: string,
     path: string,
     bytes: Uint8Array,
-    base?: RevisionBase,
+    base?: WriteBase,
     mime?: string,
   ): Promise<RevisionBase> {
     if (mime !== undefined && !MIME.test(mime))
@@ -1442,12 +1470,17 @@ export class VaultSession {
     id: string,
     path: string,
     bytes: Uint8Array | undefined,
-    base?: RevisionBase,
+    base?: WriteBase,
     mime?: string,
   ): Promise<RevisionBase> {
     if (/\.mdx?$/iu.test(path) || isInternalWritingPath(path))
       throw new Error("This path is reserved for notes and preferences.");
     const baseline = await this.storedItems();
+    if (base?.current)
+      await this.assertCurrent(
+        baseline.find((row) => row.id === id),
+        base,
+      );
     const visible = (await this.metadata(baseline)).filter(
       (item) => !item.trashed,
     );
@@ -1537,7 +1570,7 @@ export class VaultSession {
     path: string,
     source: string,
     provenance?: Provenance,
-    base?: RevisionBase,
+    base?: WriteBase,
   ): Promise<RevisionBase> {
     return this.writeNote(id, path, source, "upsert", provenance, base);
   }
@@ -1547,11 +1580,16 @@ export class VaultSession {
     source: string | undefined,
     mode: "create" | "rename" | "upsert",
     provenance?: Provenance,
-    base?: RevisionBase,
+    base?: WriteBase,
   ): Promise<RevisionBase> {
     if (!/\.mdx?$/iu.test(path))
       throw new Error("Note path must end in .md or .mdx");
     const baseline = await this.storedItems();
+    if (base?.current)
+      await this.assertCurrent(
+        baseline.find((row) => row.id === id),
+        base,
+      );
     if (mode === "upsert" && baseline.some((item) => item.id === id)) {
       const metadata = await this.metadata(baseline);
       const previous = metadata.find((item) => item.id === id);
@@ -1880,10 +1918,16 @@ export class VaultSession {
    * sign as theirs rather than drop another admin's signature; it signs only
    * that exact row.
    */
-  async remove(id: string, endorsed?: string): Promise<void> {
+  /** `base`, when given, must name the stored row: the trash refuses a removal planned on an older one. */
+  async remove(
+    id: string,
+    endorsed?: string,
+    base?: RevisionBase,
+  ): Promise<void> {
     const stored = endorsed
       ? await this.shown(id, endorsed)
       : await this.database.items.get(id);
+    if (base) await this.assertCurrent(stored, base);
     if (!stored) return;
     const trashed = { ...(await this.read(stored)), trashed: true };
     const lost = noLoss();

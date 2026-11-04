@@ -67,7 +67,11 @@ import {
   vaultRecordSchema,
 } from "../sync/vault-transport.ts";
 import { createSession, type SessionServices } from "../vault/session.ts";
-import { retireVaultDatabase, strandedEdits } from "../vault/storage.ts";
+import {
+  retireVaultDatabase,
+  strandedEdits,
+  type VaultStorage,
+} from "../vault/storage.ts";
 import { LINK_DEVICES } from "./flow-devices.ts";
 import { flowIdAnswered } from "./flow-passkeys.ts";
 import { localRuntime } from "./local-runtime.ts";
@@ -194,8 +198,8 @@ interface VaultPort<Identity> {
   forget?(reason: "removed" | "revoked"): Promise<void>;
   /** The preview planner and search index the app lends each session it opens. */
   services?: SessionServices;
-  /** This holder's local database namespace (`SessionOptions.storage`). */
-  storage?: string;
+  /** Where this holder's local database lives (`SessionOptions.storage`). */
+  storage?: VaultStorage;
   runtime?(
     session: ReturnType<typeof createSession>,
     key: Uint8Array,

@@ -63,12 +63,25 @@ function encryptedBytes(entry: StoredRevision) {
   );
 }
 
+/** Where a holder's local databases live, when not under the defaults. */
+export interface VaultStorage {
+  /**
+   * Keeps holders that share an origin, such as two plugin vaults in one
+   * app, from sharing one outbox: a linked device's recipient id. Passkey
+   * and recovery sessions never set it, so their databases keep the names
+   * browsers already hold.
+   */
+  namespace?: string;
+  /** The IndexedDB to keep them in, instead of Dexie's default. */
+  indexedDB?: { factory: IDBFactory; keyRange: typeof IDBKeyRange };
+}
+/** A write that would land on another row than the one it was planned on: read again, then retry. */
+export class StaleWriteError extends Error {}
 /**
  * Each epoch's ciphertext lives in its own database, so a session never reads
  * or publishes an envelope sealed under another epoch's key. Epoch 1 keeps the
- * name every vault had before rotation existed. A `namespace` (a linked
- * device's recipient id) keeps holders that share an origin, such as two
- * plugin vaults in one app, from sharing one outbox.
+ * name every vault had before rotation existed, and a `namespace` is appended
+ * only for the holders that set one (`VaultStorage`).
  */
 export function databaseName(
   owner: string,
@@ -82,6 +95,43 @@ export function databaseName(
       : `flow-note:${owner}:${vault}`;
   return namespace ? `${name}#${namespace}` : name;
 }
+const dexieDependencies = (storage?: VaultStorage) =>
+  storage?.indexedDB && {
+    indexedDB: storage.indexedDB.factory,
+    IDBKeyRange: storage.indexedDB.keyRange,
+  };
+async function databaseExists(
+  owner: string,
+  vault: string,
+  epoch: number,
+  storage?: VaultStorage,
+): Promise<boolean> {
+  const name = databaseName(owner, vault, epoch, storage?.namespace);
+  const factory = storage?.indexedDB?.factory;
+  if (!factory) return Dexie.exists(name);
+  return (await factory.databases()).some((info) => info.name === name);
+}
+/** Names of the vault databases in `storage`'s IndexedDB, or Dexie's default one. */
+export async function vaultDatabaseNames(
+  storage?: VaultStorage,
+): Promise<string[]> {
+  const factory = storage?.indexedDB?.factory;
+  const names = factory
+    ? (await factory.databases()).flatMap((info) =>
+        info.name ? [info.name] : [],
+      )
+    : await Dexie.getDatabaseNames();
+  return names.filter((name) => name.startsWith("flow-note:"));
+}
+/** Deletes one vault database by name from `storage`'s IndexedDB, or Dexie's default one. */
+export async function deleteVaultDatabase(
+  name: string,
+  storage?: VaultStorage,
+): Promise<void> {
+  const dependencies = dexieDependencies(storage);
+  if (dependencies) await new Dexie(name, dependencies).delete();
+  else await Dexie.delete(name);
+}
 /**
  * Clears an earlier epoch's database once nothing in it waits to sync, and
  * returns how many edits still do. The check and the clear share one
@@ -93,11 +143,10 @@ export async function retireVaultDatabase(
   owner: string,
   vault: string,
   epoch: number,
-  namespace?: string,
+  storage?: VaultStorage,
 ): Promise<number> {
-  if (!(await Dexie.exists(databaseName(owner, vault, epoch, namespace))))
-    return 0;
-  const database = new VaultDatabase(owner, vault, epoch, namespace);
+  if (!(await databaseExists(owner, vault, epoch, storage))) return 0;
+  const database = new VaultDatabase(owner, vault, epoch, storage);
   try {
     return await database.transaction(
       "rw",
@@ -127,11 +176,10 @@ export async function pendingWrites(
   owner: string,
   vault: string,
   epoch: number,
-  namespace?: string,
+  storage?: VaultStorage,
 ): Promise<number> {
-  if (!(await Dexie.exists(databaseName(owner, vault, epoch, namespace))))
-    return 0;
-  const database = new VaultDatabase(owner, vault, epoch, namespace);
+  if (!(await databaseExists(owner, vault, epoch, storage))) return 0;
+  const database = new VaultDatabase(owner, vault, epoch, storage);
   try {
     return await database.outbox.count();
   } finally {
@@ -143,9 +191,9 @@ export async function strandedEdits(
   owner: string,
   vault: string,
   epoch: number,
-  namespace?: string,
+  storage?: VaultStorage,
 ): Promise<Blob> {
-  const database = new VaultDatabase(owner, vault, epoch, namespace);
+  const database = new VaultDatabase(owner, vault, epoch, storage);
   try {
     const rows = await database.outbox.toArray();
     return new Blob(
@@ -199,8 +247,11 @@ export class VaultDatabase extends Dexie {
   outbox!: Table<PendingWrite, string>;
   history!: Table<HistoryRevision, string>;
   historyState!: Table<HistoryState, string>;
-  constructor(owner: string, vault: string, epoch = 1, namespace?: string) {
-    super(databaseName(owner, vault, epoch, namespace));
+  constructor(owner: string, vault: string, epoch = 1, storage?: VaultStorage) {
+    super(
+      databaseName(owner, vault, epoch, storage?.namespace),
+      dexieDependencies(storage),
+    );
     this.version(1).stores({
       items: "id",
       outbox: "id",
@@ -309,11 +360,11 @@ export class VaultDatabase extends Dexie {
       async () => {
         const previous = await this.items.get(value.id);
         if ((previous?.sequence ?? null) !== expectedSequence)
-          throw new Error("Concurrent local edit");
+          throw new StaleWriteError("Concurrent local edit");
         const pending = await this.outbox.get(value.id);
         const expectedCid = rebase ? rebase.fromCid : value.baseCid;
         if (previous && previous.baseCid !== expectedCid)
-          throw new Error("Concurrent local edit during sync");
+          throw new StaleWriteError("Concurrent local edit during sync");
         let base: PendingWrite["baseRevision"];
         if (value.baseCid !== null) {
           if (rebase) base = encryptedBase(rebase.revision, value.baseCid);
