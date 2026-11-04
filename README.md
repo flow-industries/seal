@@ -35,13 +35,16 @@ await linkDevice(seed, {
 });
 
 const vault = await openDeviceVault(seed, options);
+if (!(await vault.sync()).read) throw new Error("Couldn't reach the vault"); // don't plan against a local copy alone
 const [note] = (await vault.read()).notes;
 if (note) {
   const saved = await vault.saveNote({ ...note, source: `${note.source}\nmore` });
   await vault.saveNote({ ...note, ...saved, source: `${note.source}\nmore, again` });
 }
-vault.stop();
+await vault.stop();
 ```
+
+`sync()` resolves with `{ read }`, which says whether that sync read the vault from the PDS and applied it. Until one has, `read()` shows only what this device holds locally, which a fresh or offline device may not have filled yet, so don't plan moves or deletions against it.
 
 `saveNote` resolves with the revision the saved content now has; pass it to the next save as `revision` and `digest`. A save on a revision the device can't place throws `NoteChangedError`: read the note again and reapply the edit. Moving an older view the person didn't edit only renames the note and keeps the newer text.
 
@@ -51,7 +54,7 @@ Attachments follow the same rules. `listAttachments()` lists them without their 
 
 The device client hands out only the session's own operations: read, save, rename, trash, merge or extract, and sync. It never exposes raw entries, keys or a signer. It signs only what the device itself wrote: moving, trashing or merging another admin's code writes it unsigned and reports a `TrustLoss`.
 
-Each seed keeps its own local database, named after its recipient id, so two linked devices on one origin, such as two vaults in one desktop app, never share an outbox. Passkey and recovery sessions keep their `flow-note:<did>:<vault>` names. When a device is unlinked, call `stop()` and then `deleteDeviceStorage(seed)`; edits not yet synced go with it, and no other seed's or passkey's database is touched. To keep the databases in an IndexedDB of your own, pass `indexedDB: { factory, keyRange }` in the device options and to `deleteDeviceStorage`.
+Each seed keeps its own local database, named after its recipient id, so two linked devices on one origin, such as two vaults in one desktop app, never share an outbox. Passkey and recovery sessions keep their `flow-note:<did>:<vault>` names. When a device is unlinked, `await vault.stop()` and then `deleteDeviceStorage(seed)`: `stop()` resolves only once no write is in flight and sync has stopped, so nothing races the deletion; edits not yet synced go with it, and no other seed's or passkey's database is touched. To keep the databases in an IndexedDB of your own, pass `indexedDB: { factory, keyRange }` in the device options and to `deleteDeviceStorage`.
 
 ### Test without a server
 
@@ -60,7 +63,7 @@ Each seed keeps its own local database, named after its recipient id, so two lin
 ### Runtime requirements
 
 - **IndexedDB.** The local database is IndexedDB through Dexie, which reads the global `indexedDB` once, when it is imported. Under Node, load `fake-indexeddb/auto` before this package: make it the first import of the entry you bundle. Or hand the device an IndexedDB of its own with `indexedDB: { factory, keyRange }` in its options.
-- **`fake-indexeddb` is memory only.** Edits not yet synced die with the process, so `await vault.sync()` before `stop()` and before exiting. Electron and browsers keep a real IndexedDB on disk.
+- **`fake-indexeddb` is memory only.** Edits not yet synced die with the process, so `await vault.sync()` and `await vault.stop()` before exiting. Electron and browsers keep a real IndexedDB on disk.
 - **A bundler for the device entry.** Flow ID's SDK publishes ESM that plain Node can't load, so bundle the device client with Bun or esbuild. With esbuild, mark `mppx` and `mppx/*` external: the SDK's `viem` peer imports it dynamically, and none of it reaches the bundle. Every other module loads under plain Node.
 - **Bundle size.** The device entry bundles to about 1.6 MB for Node, with no editor, renderer or UI code (`bun run size`).
 
