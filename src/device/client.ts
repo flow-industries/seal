@@ -115,10 +115,12 @@ export type DeviceNote = Pick<
 >;
 /**
  * `current`: compare-and-swap. The write is refused with `NoteChangedError`
- * unless its `revision` and `digest` name the stored revision itself. Without
- * it, a base this device can place on an older revision is an edit of that
- * revision, and the write replaces whatever landed since, such as another
- * device's edit a sync brought in after the caller read.
+ * unless its `revision` and `digest` name the stored revision itself, and
+ * also when a sync lands mid-write, even one that changed another note: read
+ * again and retry. Without it, a base this device can place on an older
+ * revision is an edit of that revision, and the write replaces whatever
+ * landed since, such as another device's edit a sync brought in after the
+ * caller read.
  */
 export interface WriteOptions {
   current?: boolean;
@@ -176,8 +178,10 @@ export interface DeviceVault {
   /**
    * Moves a note or an attachment and resolves with its new revision. A
    * note's move rewrites the links to it; an attachment's leaves them as
-   * written, so save the notes that link to it. With `base`, it is refused
-   * with `NoteChangedError` unless `base` names the stored revision.
+   * written, so save the notes that link to it. A move to the path it
+   * already has writes nothing and resolves with its current revision. With
+   * `base`, it is refused with `NoteChangedError` unless `base` names the
+   * stored revision.
    */
   rename(id: string, path: string, base?: RevisionBase): Promise<RevisionBase>;
   /** Moves a note or an attachment to the trash; with `base`, only while it names the stored revision. */
