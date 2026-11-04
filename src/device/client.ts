@@ -200,9 +200,14 @@ export interface DeviceVault {
   remove(id: string, base?: RevisionBase): Promise<void>;
   compose(request: ComposeRequest): Promise<{ selectedId: string }>;
   /**
-   * Writes sync on their own; this syncs now, joining a sync already
-   * running. `read` says whether it read the vault from the PDS: until one
-   * has, what `read()` returns may be only this device's local copy.
+   * Writes sync on their own; this syncs now. When a sync is already
+   * running, it also waits for one more run after it, so the run it reports
+   * holds every save that resolved before the call. Unless something stays
+   * queued, such as a run the PDS refused (the status listener then hears
+   * something other than `SYNCED`), those saves are on the PDS when it
+   * resolves. `read` says whether the run read the vault from the PDS:
+   * until one has, what `read()` returns may be only this device's local
+   * copy.
    */
   sync(): Promise<SyncReport>;
   /** `SYNC_LOCKED` means the device lost access and the keys are gone: open it again to learn why. */
@@ -216,8 +221,9 @@ export interface DeviceVault {
    * Refuses new operations, lets those already running finish, then wipes
    * the vault and signing keys and stops syncing. Resolves once nothing
    * touches the local database or the PDS any more, so `deleteDeviceStorage`
-   * may follow. Writes not yet synced wait in the local database for the
-   * next open.
+   * may follow. It never uploads anything itself: writes not yet synced
+   * wait in the local database for the next open, so call `sync()` first to
+   * send them.
    */
   stop(): Promise<void>;
 }

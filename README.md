@@ -44,7 +44,7 @@ if (note) {
 await vault.stop();
 ```
 
-`sync()` resolves with `{ read }`, which says whether that sync read the vault from the PDS and applied it. Until one has, `read()` shows only what this device holds locally, which a fresh or offline device may not have filled yet, so don't plan moves or deletions against it.
+`sync()` resolves once every save that resolved before the call is on the PDS: when a sync is already running, it waits for one more run after it. If anything stays queued, for example because the PDS refused the run (offline, quota, rate limit), the status listener hears something other than `SYNCED`. It resolves with `{ read }`, which says whether that sync read the vault from the PDS and applied it. Until one has, `read()` shows only what this device holds locally, which a fresh or offline device may not have filled yet, so don't plan moves or deletions against it.
 
 `saveNote` resolves with the revision the saved content now has; pass it to the next save as `revision` and `digest`. A save on a revision the device can't place throws `NoteChangedError`: read the note again and reapply the edit. Moving an older view the person didn't edit only renames the note and keeps the newer text.
 
@@ -63,7 +63,7 @@ Each seed keeps its own local database, named after its recipient id, so two lin
 ### Runtime requirements
 
 - **IndexedDB.** The local database is IndexedDB through Dexie, which reads the global `indexedDB` once, when it is imported. Under Node, load `fake-indexeddb/auto` before this package: make it the first import of the entry you bundle. Or hand the device an IndexedDB of its own with `indexedDB: { factory, keyRange }` in its options.
-- **`fake-indexeddb` is memory only.** Edits not yet synced die with the process, so `await vault.sync()` and `await vault.stop()` before exiting. Electron and browsers keep a real IndexedDB on disk.
+- **`fake-indexeddb` is memory only.** Edits not yet synced die with the process. Before exiting, `await vault.sync()` after your last save, check that the last status you heard is `SYNCED`, then `await vault.stop()`. `stop()` never uploads by itself, since it is also how an unlinked device shuts down and must work offline. Electron and browsers keep a real IndexedDB on disk.
 - **A bundler for the device entry.** Flow ID's SDK publishes ESM that plain Node can't load, so bundle the device client with Bun or esbuild. With esbuild, mark `mppx` and `mppx/*` external: the SDK's `viem` peer imports it dynamically, and none of it reaches the bundle. Every other module loads under plain Node.
 - **Bundle size.** The device entry bundles to about 1.6 MB for Node, with no editor, renderer or UI code (`bun run size`).
 
