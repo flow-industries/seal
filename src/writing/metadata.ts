@@ -170,6 +170,17 @@ export function readNoteFrontmatter(
   return result;
 }
 
+const CONTINUES_WORD = /[\p{L}\p{N}_/\\]/u;
+/**
+ * Whether the `#` at `index` can start a tag: the code point before it can't
+ * continue a word or a path. Checked by hand rather than with a lookbehind,
+ * which WebKit before 16.4 can't parse, failing the whole bundle that holds it.
+ */
+function startsTag(text: string, index: number): boolean {
+  const before = Array.from(text.slice(Math.max(0, index - 2), index)).at(-1);
+  return !before || !CONTINUES_WORD.test(before);
+}
+
 export function readNoteMetadata(
   source: string,
   propertyTypes: PropertyTypes = {},
@@ -178,10 +189,8 @@ export function readNoteMetadata(
   const bodyStart = result.frontmatter?.end ?? 0;
   const body = maskMarkdownComments(source.slice(bodyStart));
   const candidates = [
-    ...body.matchAll(
-      /(?<![\p{L}\p{N}_/\\])#([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gu,
-    ),
-  ];
+    ...body.matchAll(/#([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gu),
+  ].filter((match) => startsTag(body, match.index));
   if (!candidates.length) return result;
   const excluded: { from: number; to: number }[] = [];
   gfmParser.parse(body).iterate({

@@ -238,3 +238,38 @@ test("read-only frontmatter retains malformed YAML and alias expansion limits", 
     expect(() => updateNoteProperty(source, "key", "fixed")).toThrow();
   }
 });
+
+test("inline tags start only after a character that can't continue a word or a path", () => {
+  const tagsOf = (body: string) => readNoteMetadata(body).tags;
+  expect(tagsOf("#start and #end")).toEqual(["start", "end"]);
+  expect(tagsOf("word#no 1#no _#no /#no \\#no")).toEqual([]);
+  expect(tagsOf("é#no 中#no 𝐀#no 𝟙#no")).toEqual([]);
+  expect(tagsOf("-#dash (#paren) .#dot 😀#emoji\t#tab")).toEqual([
+    "dash",
+    "paren",
+    "dot",
+    "emoji",
+    "tab",
+  ]);
+  expect(tagsOf("#a-#b #c/d#e #f/g/h #1 #2x")).toEqual([
+    "a-",
+    "b",
+    "c/d",
+    "f/g/h",
+    "2x",
+  ]);
+  expect(tagsOf("line\n#next\r\n#crlf")).toEqual(["next", "crlf"]);
+});
+
+test("no source module uses a regex lookbehind, which older WebKit can't parse", async () => {
+  const glob = new Bun.Glob("**/*.ts");
+  const root = new URL("..", import.meta.url).pathname;
+  const found: string[] = [];
+  for await (const path of glob.scan(root))
+    if (
+      !path.endsWith(".test.ts") &&
+      /\(\?<[=!]/u.test(await Bun.file(root + path).text())
+    )
+      found.push(path);
+  expect(found).toEqual([]);
+});
