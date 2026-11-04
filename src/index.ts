@@ -52,5 +52,9 @@ export {
   PUBLISH_WAIT_MS,
   type WriteOptions,
 } from "./device/client.ts";
-export type { RevisionBase, TrustLoss } from "./vault/session.ts";
+export type {
+  MoveOptions,
+  RevisionBase,
+  TrustLoss,
+} from "./vault/session.ts";
 export type { ComposeRequest } from "./writing/composer.ts";

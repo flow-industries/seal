@@ -398,3 +398,77 @@ test("sync() says whether it read the vault from the PDS", async () => {
   await vault.stop();
   expect(await vault.sync()).toEqual({ read: false });
 }, 30_000);
+
+/** Alpha, Beta and an Index linking to both, as one device holds them. */
+async function linkedNotes() {
+  Dexie.dependencies.indexedDB = new IDBFactory();
+  const admin = await adminBrowser(fakeFlowId());
+  const vault = await (await linkedDevice(admin, "Laptop")).open();
+  const ids = {
+    alpha: crypto.randomUUID(),
+    beta: crypto.randomUUID(),
+    index: crypto.randomUUID(),
+  };
+  await vault.saveNote({ id: ids.alpha, path: "Alpha.md", source: "alpha" });
+  await vault.saveNote({ id: ids.beta, path: "Beta.md", source: "beta" });
+  const index = { id: ids.index, path: "Index.md" };
+  const written = await vault.saveNote({
+    ...index,
+    source: "first [[Alpha]] then [[Beta]]",
+  });
+  const source = async (id: string) =>
+    (await vault.read()).notes.find((note) => note.id === id)?.source;
+  /** The Index text an editor already rewrote for the new names, saved first, as a plugin pushes it. */
+  const edited = (text: string) =>
+    vault.saveNote({ ...index, ...written, source: text });
+  return { vault, ids, source, edited };
+}
+
+test("moves that skip link repair keep links an editor already rewrote, through a swap and a chain", async () => {
+  const swap = await linkedNotes();
+  await swap.edited("first [[Beta]] then [[Alpha]]");
+  const skip = { repairLinks: false };
+  await swap.vault.rename(swap.ids.alpha, "Alpha moving.md", undefined, skip);
+  await swap.vault.rename(swap.ids.beta, "Alpha.md", undefined, skip);
+  await swap.vault.rename(swap.ids.alpha, "Beta.md", undefined, skip);
+  expect(await swap.source(swap.ids.index)).toBe(
+    "first [[Beta]] then [[Alpha]]",
+  );
+
+  const chain = await linkedNotes();
+  await chain.edited("first [[Beta]] then [[Gamma]]");
+  const beta = (await chain.vault.read()).notes.find(
+    (note) => note.id === chain.ids.beta,
+  );
+  if (!beta) throw new Error("Missing Beta");
+  await chain.vault.saveNote({ ...beta, path: "Gamma.md" }, skip);
+  await chain.vault.rename(chain.ids.alpha, "Beta.md", undefined, skip);
+  expect(await chain.source(chain.ids.index)).toBe(
+    "first [[Beta]] then [[Gamma]]",
+  );
+}, 30_000);
+
+test("moves repair links by default, and re-target links an editor already rewrote when names swap", async () => {
+  const single = await linkedNotes();
+  await single.vault.rename(single.ids.alpha, "Gamma.md");
+  expect(await single.source(single.ids.index)).toBe(
+    "first [[/Gamma]] then [[Beta]]",
+  );
+  const beta = (await single.vault.read()).notes.find(
+    (note) => note.id === single.ids.beta,
+  );
+  if (!beta) throw new Error("Missing Beta");
+  await single.vault.saveNote({ ...beta, path: "Delta.md" });
+  expect(await single.source(single.ids.index)).toBe(
+    "first [[/Gamma]] then [[/Delta]]",
+  );
+
+  const swap = await linkedNotes();
+  await swap.edited("first [[Beta]] then [[Alpha]]");
+  await swap.vault.rename(swap.ids.alpha, "Alpha moving.md");
+  await swap.vault.rename(swap.ids.beta, "Alpha.md");
+  await swap.vault.rename(swap.ids.alpha, "Beta.md");
+  expect(await swap.source(swap.ids.index)).not.toBe(
+    "first [[Beta]] then [[Alpha]]",
+  );
+}, 30_000);

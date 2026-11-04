@@ -47,6 +47,7 @@ import {
 } from "../sync/vault-transport.ts";
 import type {
   AssetSummary,
+  MoveOptions,
   RevisionBase,
   TrustLoss,
   VaultSession,
@@ -127,9 +128,10 @@ export type DeviceNote = Pick<
  * landed since, such as another device's edit a sync brought in after the
  * caller read.
  */
-export interface WriteOptions {
+export interface WriteOptions extends MoveOptions {
   current?: boolean;
 }
+
 /** An attachment as `DeviceVault.listAttachments` lists it: everything but its bytes. */
 export type DeviceAttachment = AssetSummary;
 /** An attachment to save; an existing one's `revision` and `digest` name the revision the device's copy came from. */
@@ -182,13 +184,18 @@ export interface DeviceVault {
   ): Promise<RevisionBase>;
   /**
    * Moves a note or an attachment and resolves with its new revision. A
-   * note's move rewrites the links to it; an attachment's leaves them as
-   * written, so save the notes that link to it. A move to the path it
-   * already has writes nothing and resolves with its current revision. With
-   * `base`, it is refused with `NoteChangedError` unless `base` names the
-   * stored revision.
+   * note's move rewrites the links to it, unless `options.repairLinks` is
+   * false; an attachment's leaves them as written, so save the notes that
+   * link to it. A move to the path it already has writes nothing and
+   * resolves with its current revision. With `base`, it is refused with
+   * `NoteChangedError` unless `base` names the stored revision.
    */
-  rename(id: string, path: string, base?: RevisionBase): Promise<RevisionBase>;
+  rename(
+    id: string,
+    path: string,
+    base?: RevisionBase,
+    options?: MoveOptions,
+  ): Promise<RevisionBase>;
   /** Moves a note or an attachment to the trash; with `base`, only while it names the stored revision. */
   remove(id: string, base?: RevisionBase): Promise<void>;
   compose(request: ComposeRequest): Promise<{ selectedId: string }>;
@@ -682,7 +689,9 @@ function sessionVault(
         if (!(await session.places(note.id, base)))
           throw new NoteChangedError();
         return swapped(!!base?.current, () =>
-          session.saveNote(note.id, note.path, note.source, undefined, base),
+          session.saveNote(note.id, note.path, note.source, undefined, base, {
+            repairLinks: options.repairLinks,
+          }),
         );
       }),
     listAttachments: () => tracked(() => session.listAssets()),
@@ -696,11 +705,13 @@ function sessionVault(
           session.saveAsset(id, path, bytes, base, mime),
         );
       }),
-    rename: (id, path, base) =>
+    rename: (id, path, base, options = {}) =>
       tracked(async () => {
         if (isInternalWritingPath(path))
           throw new Error("This path is reserved for vault preferences.");
-        return swapped(!!base, () => session.rename(id, path, base));
+        return swapped(!!base, () =>
+          session.rename(id, path, base, { repairLinks: options.repairLinks }),
+        );
       }),
     remove: (id, base) =>
       tracked(async () => {

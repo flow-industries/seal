@@ -153,6 +153,17 @@ export interface RevisionBase {
  */
 export type WriteBase = RevisionBase & { current?: boolean };
 /**
+ * `repairLinks: false`: a note's move leaves every link as written, both in
+ * the notes linking to it and in the note itself. Pass it when the editor
+ * already rewrote the links for the new names, as Obsidian does with
+ * "Automatically update internal links": repairing them again would
+ * re-target them wherever names swap or chain. Attachments' moves never
+ * repair links.
+ */
+export interface MoveOptions {
+  repairLinks?: boolean;
+}
+/**
  * One exact stored revision of an item, as the person was shown it: its
  * `revisionDigest`, which binds the ciphertext, since a revision id alone
  * can be reused for other content.
@@ -1430,12 +1441,21 @@ export class VaultSession {
     id: string,
     path: string,
     base?: RevisionBase,
+    move: MoveOptions = {},
   ): Promise<RevisionBase> {
     const current = base && { ...base, current: true };
     const stored = await this.database.items.get(id);
     if (stored && (await this.read(stored, false)).kind === "asset")
       return this.writeAsset(id, path, undefined, current);
-    return this.writeNote(id, path, undefined, "rename", undefined, current);
+    return this.writeNote(
+      id,
+      path,
+      undefined,
+      "rename",
+      undefined,
+      current,
+      move,
+    );
   }
   /** Refuses a write planned on any row but the stored one, because another holder's edit may have landed since. */
   private async assertCurrent(
@@ -1574,8 +1594,9 @@ export class VaultSession {
     source: string,
     provenance?: Provenance,
     base?: WriteBase,
+    move: MoveOptions = {},
   ): Promise<RevisionBase> {
-    return this.writeNote(id, path, source, "upsert", provenance, base);
+    return this.writeNote(id, path, source, "upsert", provenance, base, move);
   }
   private async writeNote(
     id: string,
@@ -1584,6 +1605,7 @@ export class VaultSession {
     mode: "create" | "rename" | "upsert",
     provenance?: Provenance,
     base?: WriteBase,
+    { repairLinks = true }: MoveOptions = {},
   ): Promise<RevisionBase> {
     if (!/\.mdx?$/iu.test(path))
       throw new Error("Note path must end in .md or .mdx");
@@ -1699,7 +1721,11 @@ export class VaultSession {
     );
     const stored = new Map(baseline.map((value) => [value.id, value]));
     const lost = noLoss();
-    if (previous && (previous.name !== name || previous.parent !== parent)) {
+    if (
+      repairLinks &&
+      previous &&
+      (previous.name !== name || previous.parent !== parent)
+    ) {
       const beforePaths = paths(visible);
       const afterPaths = paths(prospective);
       const snapshots = (items: VaultItem[], index: Map<string, string>) =>
