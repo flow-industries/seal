@@ -40,7 +40,11 @@ import {
   type VaultRecordV2,
   vaultRecordSchema,
 } from "../sync/vault-transport.ts";
-import type { TrustLoss, VaultSession } from "../vault/session.ts";
+import type {
+  RevisionBase,
+  TrustLoss,
+  VaultSession,
+} from "../vault/session.ts";
 import type { ComposeRequest } from "../writing/composer.ts";
 import { isInternalWritingPath } from "../writing/preferences.ts";
 
@@ -108,12 +112,16 @@ export interface DeviceVault {
   /** Every note with its source; `.mdx` notes carry `origin`, whether their code runs here by itself. */
   read(): Promise<{ notes: NoteView[]; folders: string[] }>;
   /**
-   * Saves what the person typed, judged against the revision they edited.
-   * A new `id` creates the note and a new `path` moves it; a save that
-   * changes nothing writes nothing. An existing note saved without a
-   * revision this device can place throws `NoteChangedError`.
+   * Saves what the person typed, judged against the revision they edited,
+   * and resolves with the revision the saved content now has: pass it as the
+   * next save's `revision` and `digest`, with no `read` in between. A new
+   * `id` creates the note and a new `path` moves it; a save that changes
+   * nothing writes nothing. A move of an older view the person didn't edit
+   * keeps the newer text and only renames, so it resolves with that older
+   * revision: read the note again to see the text it kept. An existing note
+   * saved without a revision this device can place throws `NoteChangedError`.
    */
-  saveNote(note: DeviceNote): Promise<void>;
+  saveNote(note: DeviceNote): Promise<RevisionBase>;
   rename(id: string, path: string): Promise<void>;
   /** Moves the note to the trash. */
   remove(id: string): Promise<void>;
@@ -541,13 +549,13 @@ function sessionVault(
   return {
     read: () => runtime.read(),
     async saveNote(note) {
+      if (stopped) throw new Error("Vault locked");
+      if (isInternalWritingPath(note.path))
+        throw new Error("This path is reserved for vault preferences.");
       const { revision, digest } = note;
       const base = revision && digest ? { revision, digest } : undefined;
       if (!(await session.places(note.id, base))) throw new NoteChangedError();
-      await runtime.save({
-        ...note,
-        kind: /\.mdx$/iu.test(note.path) ? "mdx" : "md",
-      });
+      return session.saveNote(note.id, note.path, note.source, undefined, base);
     },
     async rename(id, path) {
       if (stopped) throw new Error("Vault locked");

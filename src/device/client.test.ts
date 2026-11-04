@@ -704,6 +704,90 @@ describe("a device vault's writes follow the session's carry rules", () => {
     expect(losses).toEqual([]);
   }, 30_000);
 
+  test("a save resolves with the revision it left, so the next save needs no read in between", async () => {
+    const { vault, entry, replace, view, row, ids, second } = await carried();
+    const id = crypto.randomUUID();
+    const first = await vault.saveNote({ id, path: "Draft.md", source: "one" });
+    const next = await vault.saveNote({
+      id,
+      path: "Draft.md",
+      source: "one, two",
+      ...first,
+    });
+    const shown = await view("Draft.md");
+    expect(shown.source).toBe("one, two");
+    expect(next).toEqual({
+      revision: shown.revision ?? "",
+      digest: shown.digest ?? "",
+    });
+    expect(next).not.toEqual(first);
+    // A save that writes nothing names the row the content already has.
+    expect(
+      await vault.saveNote({
+        id,
+        path: "Draft.md",
+        source: "one, two",
+        ...next,
+      }),
+    ).toEqual(next);
+    expect((await row(id))?.revision).toBe(next.revision);
+
+    // An unedited flush of an older view still names that view, not the newer row it didn't see.
+    const older = await view("A.mdx");
+    await replace(
+      await entry(
+        second,
+        { id: "a", name: "A.mdx", revisionCounter: 2 },
+        "# A, the other admin's",
+        "a-2",
+      ),
+    );
+    await vault.sync();
+    expect(await vault.saveNote(older)).toEqual({
+      revision: older.revision ?? "",
+      digest: older.digest ?? "",
+    });
+    expect(await row("a")).toMatchObject({
+      revision: "a-2",
+      signer: ids.other,
+    });
+  }, 30_000);
+
+  test("moving an older view it didn't edit only renames, keeping the newer text", async () => {
+    const { vault, losses, entry, replace, view, row, rows, owner } =
+      await carried();
+    const older = await view("Plain.md");
+    await replace(
+      await entry(
+        owner,
+        { id: "plain", name: "Plain.md", revisionCounter: 2 },
+        "# Plain, edited on the passkey",
+        "plain-2",
+      ),
+    );
+    await vault.sync();
+    const moved = await vault.saveNote({ ...older, path: "Sub/Plain.md" });
+    // The view the device holds is still the older one, so its next save is judged against that.
+    expect(moved).toEqual({
+      revision: older.revision ?? "",
+      digest: older.digest ?? "",
+    });
+    const plain = await row("plain");
+    expect(plain).toMatchObject({
+      name: "Plain.md",
+      text: "# Plain, edited on the passkey",
+    });
+    expect(plain?.revision).not.toBe("plain-2");
+    expect((await rows()).find((value) => value.name === "Sub")).toBeDefined();
+    expect((await view("Sub/Plain.md")).source).toBe(
+      "# Plain, edited on the passkey",
+    );
+    // Saving that older view again, unedited, writes nothing.
+    await vault.saveNote({ ...older, path: "Sub/Plain.md", ...moved });
+    expect((await row("plain"))?.revision).toBe(plain?.revision);
+    expect(losses).toEqual([]);
+  }, 30_000);
+
   test("hands out origin verdicts no caller can rewrite", async () => {
     const { vault, losses, view } = await carried();
     const { origin: a } = await view("A.mdx");

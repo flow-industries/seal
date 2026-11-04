@@ -560,7 +560,9 @@ export class VaultSession {
     this.written.set(id, line);
   }
   /** `revisionDigest`, cached for current rows; a history row shares its item's id, so it is never cached. */
-  private async digestOf(row: StoredRevision): Promise<string> {
+  private async digestOf(
+    row: Pick<StoredRevision, "id" | "revision" | "envelope" | "chunkHashes">,
+  ): Promise<string> {
     const ciphertext = row.envelope.ciphertext;
     const cached = this.digests.get(row.id);
     if (cached?.ciphertext === ciphertext) return cached.digest;
@@ -1085,7 +1087,7 @@ export class VaultSession {
     prospective: VaultItem[],
     changed: VaultItem[],
     vouched: ReadonlyMap<string, boolean>,
-  ): Promise<Map<string, string>> {
+  ): Promise<Map<string, Omit<StoredRevision, "sequence">>> {
     const generation = this.generation;
     paths(prospective);
     const byId = new Map(baseline.map((item) => [item.id, item]));
@@ -1149,9 +1151,7 @@ export class VaultSession {
           throw new Error("Vault locked");
       },
     );
-    return new Map(
-      encrypted.map(({ item, prepared }) => [item.id, prepared.revision]),
-    );
+    return new Map(encrypted.map(({ item, prepared }) => [item.id, prepared]));
   }
   /**
    * Reads need a sound graph, so a repair rewrites even code another admin
@@ -1335,6 +1335,12 @@ export class VaultSession {
     await this.writeNote(id, path, "", "create");
     return id;
   }
+  /** The revision and digest of a row as stored, to name it as a later save's base. */
+  private async baseOf(
+    row: Pick<StoredRevision, "id" | "revision" | "envelope" | "chunkHashes">,
+  ): Promise<RevisionBase> {
+    return { revision: row.revision, digest: await this.digestOf(row) };
+  }
   async rename(id: string, path: string): Promise<void> {
     await this.writeNote(id, path, undefined, "rename");
   }
@@ -1342,7 +1348,10 @@ export class VaultSession {
   /**
    * `base` is the revision the person's view of the note had when they made
    * the change; a change made on content that has since been replaced is
-   * vouched for by that content alone.
+   * vouched for by that content alone. Resolves with the revision the saved
+   * content now has, which names the next save's base: the row written, the
+   * stored row when nothing needed writing, or `base` itself when the view's
+   * content isn't what is stored (an unedited older view, or a move of one).
    */
   async saveNote(
     id: string,
@@ -1350,8 +1359,8 @@ export class VaultSession {
     source: string,
     provenance?: Provenance,
     base?: RevisionBase,
-  ): Promise<void> {
-    await this.writeNote(id, path, source, "upsert", provenance, base);
+  ): Promise<RevisionBase> {
+    return this.writeNote(id, path, source, "upsert", provenance, base);
   }
   private async writeNote(
     id: string,
@@ -1360,7 +1369,7 @@ export class VaultSession {
     mode: "create" | "rename" | "upsert",
     provenance?: Provenance,
     base?: RevisionBase,
-  ): Promise<void> {
+  ): Promise<RevisionBase> {
     if (!/\.mdx?$/iu.test(path))
       throw new Error("Note path must end in .md or .mdx");
     const baseline = await this.storedItems();
@@ -1382,7 +1391,8 @@ export class VaultSession {
         let vouched: boolean;
         if (!provenance && !this.signsAsAdmin()) {
           const typed = await this.typedHere(item, stored, base);
-          if (typed === "unchanged") return;
+          if (typed === "unchanged")
+            return this.unchangedBase(item, stored, base);
           vouched = typed === "typed";
           if (typed === "unplaced" && (await this.heldCode(item, stored)))
             lost.unsigned.push(item.name);
@@ -1401,16 +1411,18 @@ export class VaultSession {
           (await this.heldCode(item, stored)) &&
           (await this.openStored(stored)) === source
         )
-          return;
+          return this.baseOf(stored);
         const written = await this.commitPathChanges(
           baseline,
           visible,
           [item],
           new Map([[id, vouched]]),
         );
-        this.wrote(id, base?.revision, written.get(id));
+        const row = written.get(id);
+        if (!row) throw new Error("Missing written note");
+        this.wrote(id, base?.revision, row.revision);
         this.reportTrustLoss(lost);
-        return;
+        return this.baseOf(row);
       }
     }
     const decoded = await Promise.all(baseline.map((item) => this.read(item)));
@@ -1421,6 +1433,23 @@ export class VaultSession {
     if (previous && (previous.kind !== "note" || previous.trashed))
       throw new Error("Item is not an active note");
     const visible = decoded.filter((item) => !item.trashed);
+    // A device's move of a view it didn't edit, made before a newer revision arrived, keeps that revision's text.
+    const viewedBase = base;
+    if (
+      previous &&
+      source !== undefined &&
+      !provenance &&
+      !this.signsAsAdmin() &&
+      (await this.movesUneditedView(
+        previous,
+        baseline.find((value) => value.id === id),
+        source,
+        base,
+      ))
+    ) {
+      source = undefined;
+      base = undefined;
+    }
     const { name, parent, folders } = this.folderForPath(path, visible);
     const timestamp = new Date().toISOString();
     const item: VaultItem = {
@@ -1509,8 +1538,44 @@ export class VaultSession {
       [...changed.values()],
       vouched,
     );
-    this.wrote(id, base?.revision, written.get(id));
+    const row = written.get(id);
+    if (!row) throw new Error("Missing written note");
+    this.wrote(id, base?.revision, row.revision);
     this.reportTrustLoss(lost);
+    return viewedBase && !base ? viewedBase : this.baseOf(row);
+  }
+  /**
+   * After a typed save that wrote nothing, the revision the caller's view
+   * matches: the stored row when it holds the same bytes, else the older row
+   * the view was made on.
+   */
+  private async unchangedBase(
+    item: VaultItem,
+    stored: StoredRevision | undefined,
+    base: RevisionBase | undefined,
+  ): Promise<RevisionBase> {
+    if (!stored) throw new Error("Missing note");
+    if (base && !sameBytes(item.bytes, (await this.read(stored)).bytes))
+      return base;
+    return this.baseOf(stored);
+  }
+  /**
+   * Whether a typed save to a new path carries, unedited, an older view than
+   * the stored row: writing its bytes would revert the newer text, so the
+   * save is only a rename.
+   */
+  private async movesUneditedView(
+    previous: VaultItem,
+    stored: StoredRevision | undefined,
+    source: string,
+    base: RevisionBase | undefined,
+  ): Promise<boolean> {
+    const bytes = new TextEncoder().encode(source);
+    if (!base || sameBytes(bytes, previous.bytes)) return false;
+    return (
+      (await this.typedHere({ ...previous, bytes }, stored, base)) ===
+      "unchanged"
+    );
   }
   /** `endorsed` lets the person sign the note they compose into, and the note an extract rewrites, whatever their sources. */
   async compose(
