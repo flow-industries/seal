@@ -227,5 +227,52 @@
         "encryptedBlobs": []
       }
     }
-  ]
+  ],
+  "prfInput": "8y3IJmzKotj5LYAGXEyuF870g9RBiGlFbpnEwhLK3sE",
+  "upgrade": {
+    "binding": {
+      "publicKey": "E_8OtdMT-HdrEJGQAUnbqRXP2917s31mOQxIe9s9os0",
+      "signature": "Holpusgm0iI6fCkdf2NZ3PqvUpqvszNIV0ZLzVwmVHvnggKrnLuHgT0Fz_y7o1NJnCk7qUKTp352gMisGUWqDA"
+    },
+    "metadata": {
+      "version": 3,
+      "epoch": 1,
+      "recipients": [
+        {
+          "id": "Eqe9huCkMDJ2IKDiJ00PbwkceDshwWljbviZf58dp2o",
+          "kind": "passkey",
+          "role": "admin",
+          "boxPublicKey": "0NYDXhfM8MJdueZx82mHMJBN97zUSO0acrD8GTR5Lg4",
+          "signPublicKey": "YForfqZtmb7iHUx-Bu00b9JBS4s-E5rHUcAQnM-2200"
+        }
+      ],
+      "accessCommitment": "L3z18FeokjD8ahg2zwM52MEQlMJwMn95ZT9x20BJGxk",
+      "statement": {
+        "kind": "upgrade",
+        "signer": "Eqe9huCkMDJ2IKDiJ00PbwkceDshwWljbviZf58dp2o",
+        "sequence": 2,
+        "nonce": "FeO-fFIQRTZNry63tU81sHL-dxZfwTo5g_XhtD_hVxM",
+        "signature": "aWUrr-RV1uzPcxWScoL0y_Q8lgvxmk1cq4qGvXlw-rwuLn5IBneIyJhVKgGmGKs41ErK8oWvmHvWvAGYTJFhCw",
+        "binding": {
+          "publicKey": "E_8OtdMT-HdrEJGQAUnbqRXP2917s31mOQxIe9s9os0",
+          "signature": "Holpusgm0iI6fCkdf2NZ3PqvUpqvszNIV0ZLzVwmVHvnggKrnLuHgT0Fz_y7o1NJnCk7qUKTp352gMisGUWqDA"
+        }
+      }
+    },
+    "pinned": {
+      "statement": "MUCLG0QncCO1iaEUjSqPIalwSS9T3mowtt-8RwC08TM",
+      "sequence": 2,
+      "admins": ["i01WW7TRUgIwPwSRGTrjV6RdZDcenVeHgY6wD0nDdpc"],
+      "recipients": ["pNx0P5PToMDX2N1kSrp_hm1w2PLcabt2PechrG0juhM"]
+    }
+  },
+  "passkeyRequest": {
+    "request": {
+      "did": "did:plc:devicee2e",
+      "boxPublicKey": "0NYDXhfM8MJdueZx82mHMJBN97zUSO0acrD8GTR5Lg4",
+      "signPublicKey": "YForfqZtmb7iHUx-Bu00b9JBS4s-E5rHUcAQnM-2200",
+      "issuedAt": 1767225600000
+    },
+    "challenge": "nO0jW3wy3XQfWovrZ4JwuSjs5O51rtsQu04NG0w0xS0"
+  }
 }

@@ -9,15 +9,18 @@ import {
   type SeedUnlockPort,
   unlockVaultWithSeed,
 } from "../src/app/unlock.ts";
-import { unwrapAccessKey } from "../src/crypto/access-v2.ts";
+import { unwrapAccessKey, v2PrfInput } from "../src/crypto/access-v2.ts";
 import {
   acceptAccess,
+  accessMetadataSchema,
   createSeedRecipient,
   openWithSeed,
   passkeyAdmin,
+  passkeyBinding,
   pinnedAccessSchema,
   recipientsOf,
   seedSigningKey,
+  UNTRUSTED_ACCESS,
   vaultRecipientSchema,
 } from "../src/crypto/access-v3.ts";
 import { entrySigner } from "../src/crypto/authorship.ts";
@@ -31,6 +34,7 @@ import {
   matchesLinkCommitment,
   pairingCode,
 } from "../src/crypto/link.ts";
+import { passkeyRequestChallenge } from "../src/crypto/passkey-proof.ts";
 import { handedCheckpoint } from "../src/device/client.ts";
 import {
   decodeSnapshot,
@@ -50,6 +54,20 @@ import golden from "./fixtures/note-v3-vault.json" with { type: "json" };
 // a passkey admin's vault with a device linked through the browser, and notes
 // the admin, the device and nobody signed. Production vaults look like this,
 // so every check here reads it exactly as it was written.
+//
+// Every `flow-note/…` domain string in `src/` is frozen, and this file alone
+// fails when any one of the 25 changes:
+// - crypto/index: `v1`;
+// - crypto/container: `v2`, twice;
+// - crypto/access-v2: `v2/prf`, `v2/access-recipient`, `v2/access-header`,
+//   `v${version}/access-wrap`;
+// - crypto/access-v3: `v3/seed-recipient`, `v3/admin-sign`, `v3/upgrade`,
+//   `v2/access-recipient`, `v3/${purpose}`, `v3/access-salt`, `v3/access`,
+//   `v3/admin`, `v3/recipient`, `v3/statement`;
+// - crypto/authorship: `v3/entry`;
+// - crypto/link: `v3/pairing`, `v3/link-commitment`, `v3/device-authorize`,
+//   `v3/link`, twice, and `v3/link-secret-key`;
+// - crypto/passkey-proof: `v3/passkey-request`.
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 afterEach(() => {
   Dexie.dependencies.indexedDB = new IDBFactory();
@@ -299,4 +317,32 @@ test("a journal over NOTE's entries seals to the same bytes NOTE's code sealed",
   } finally {
     randomness.mockRestore();
   }
+});
+
+test("the PRF input, a legacy passkey's upgrade and a passkey request derive as NOTE derived them", async () => {
+  const { prf } = await material();
+  expect(await v2PrfInput()).toEqual(decode(golden.prfInput));
+
+  const context = { did, vault, epoch };
+  const admin = await passkeyAdmin(prf, credentialId, did);
+  const { upgrade } = golden;
+  expect(
+    await passkeyBinding(prf, credentialId, context, admin.recipient),
+  ).toEqual(upgrade.binding);
+  const signed = accessMetadataSchema.parse(upgrade.metadata);
+  expect(await acceptAccess(signed, context, null)).toEqual(
+    pinnedAccessSchema.parse(upgrade.pinned),
+  );
+  const unbound = { ...signed.statement, binding: undefined };
+  await expect(
+    acceptAccess({ ...signed, statement: unbound }, context, null),
+  ).rejects.toThrow(UNTRUSTED_ACCESS);
+
+  const { request, challenge } = golden.passkeyRequest;
+  expect(request).toMatchObject({
+    did,
+    boxPublicKey: admin.recipient.boxPublicKey,
+    signPublicKey: admin.recipient.signPublicKey,
+  });
+  expect(await passkeyRequestChallenge(request)).toEqual(decode(challenge));
 });
