@@ -1,0 +1,20 @@
+{
+  "name": "@flow-industries/seal",
+  "version": "0.0.0",
+  "description": "End-to-end encrypted vault core: the container, signed access, journal sync and the device client",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flow-industries/seal.git"
+  },
+  "scripts": {
+    "lint": "biome check",
+    "format": "biome format --write",
+    "check": "biome check --write"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.8",
+    "@flow-industries/lint": "0.3.1",
+    "biome-anti-slop": "0.1.0"
+  }
+}
