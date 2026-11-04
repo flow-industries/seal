@@ -81,7 +81,8 @@ export class StaleWriteError extends Error {}
  * Each epoch's ciphertext lives in its own database, so a session never reads
  * or publishes an envelope sealed under another epoch's key. Epoch 1 keeps the
  * name every vault had before rotation existed, and a `namespace` is appended
- * only for the holders that set one (`VaultStorage`).
+ * only for the holders that set one (`VaultStorage`). No part may hold `#`,
+ * which sets the namespace apart for `deleteDeviceStorage` to match on.
  */
 export function databaseName(
   owner: string,
@@ -89,6 +90,8 @@ export function databaseName(
   epoch: number,
   namespace?: string,
 ): string {
+  if ([owner, vault, namespace ?? ""].some((part) => part.includes("#")))
+    throw new Error("Invalid vault database name");
   const name =
     epoch > 1
       ? `flow-note:${owner}:${vault}:${epoch}`
