@@ -167,10 +167,9 @@ export interface MoveOptions {
 }
 /** `MoveOptions.repairLinks` as the question it answers for each linking note. */
 function repairsLinksIn(
-  option: MoveOptions["repairLinks"] = true,
+  option: Exclude<MoveOptions["repairLinks"], false> = true,
 ): (linkingNotePath: string) => boolean {
   if (option === true) return () => true;
-  if (option === false) return () => false;
   return option;
 }
 /**
