@@ -184,9 +184,9 @@ export interface DeviceVault {
   ): Promise<RevisionBase>;
   /**
    * Moves a note or an attachment and resolves with its new revision. A
-   * note's move rewrites the links to it, unless `options.repairLinks` is
-   * false; an attachment's leaves them as written, so save the notes that
-   * link to it. A move to the path it already has writes nothing and
+   * note's move rewrites the links to it, in the notes `options.repairLinks`
+   * selects (every one by default); an attachment's leaves them as written,
+   * so save the notes that link to it. A move to the path it already has writes nothing and
    * resolves with its current revision. With `base`, it is refused with
    * `NoteChangedError` unless `base` names the stored revision.
    */

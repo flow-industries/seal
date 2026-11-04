@@ -153,15 +153,25 @@ export interface RevisionBase {
  */
 export type WriteBase = RevisionBase & { current?: boolean };
 /**
- * `repairLinks: false`: a note's move leaves every link as written, both in
- * the notes linking to it and in the note itself. Pass it when the editor
- * already rewrote the links for the new names, as Obsidian does with
- * "Automatically update internal links": repairing them again would
- * re-target them wherever names swap or chain. Attachments' moves never
- * repair links.
+ * Which notes a note's move repairs links in: the notes linking to it, and
+ * the moved note's own links. `true`, the default, repairs every one;
+ * `false` leaves every link as written; a function repairs only the notes
+ * whose path, after the move, it accepts. Leave a note alone when its editor
+ * already rewrote its links for the new names, as Obsidian does with
+ * "Automatically update internal links" for the `.md` notes it indexes:
+ * repairing them again would re-target them wherever names swap or chain.
+ * Attachments' moves never repair links.
  */
 export interface MoveOptions {
-  repairLinks?: boolean;
+  repairLinks?: boolean | ((linkingNotePath: string) => boolean);
+}
+/** `MoveOptions.repairLinks` as the question it answers for each linking note. */
+function repairsLinksIn(
+  option: MoveOptions["repairLinks"] = true,
+): (linkingNotePath: string) => boolean {
+  if (option === true) return () => true;
+  if (option === false) return () => false;
+  return option;
 }
 /**
  * One exact stored revision of an item, as the person was shown it: its
@@ -1605,7 +1615,7 @@ export class VaultSession {
     mode: "create" | "rename" | "upsert",
     provenance?: Provenance,
     base?: WriteBase,
-    { repairLinks = true }: MoveOptions = {},
+    { repairLinks }: MoveOptions = {},
   ): Promise<RevisionBase> {
     if (!/\.mdx?$/iu.test(path))
       throw new Error("Note path must end in .md or .mdx");
@@ -1722,12 +1732,13 @@ export class VaultSession {
     const stored = new Map(baseline.map((value) => [value.id, value]));
     const lost = noLoss();
     if (
-      repairLinks &&
+      repairLinks !== false &&
       previous &&
       (previous.name !== name || previous.parent !== parent)
     ) {
       const beforePaths = paths(visible);
       const afterPaths = paths(prospective);
+      const repairsIn = repairsLinksIn(repairLinks);
       const snapshots = (items: VaultItem[], index: Map<string, string>) =>
         items
           .filter(
@@ -1753,7 +1764,11 @@ export class VaultSession {
       );
       for (const value of prospective) {
         const repaired = repairs.get(value.id);
-        if (repaired === undefined) continue;
+        if (
+          repaired === undefined ||
+          !repairsIn(afterPaths.get(value.id) ?? value.name)
+        )
+          continue;
         if (
           value.id !== id &&
           (await this.heldCode(value, stored.get(value.id)))

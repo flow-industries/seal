@@ -424,28 +424,59 @@ async function linkedNotes() {
   return { vault, ids, source, edited };
 }
 
-test("moves that skip link repair keep links an editor already rewrote, through a swap and a chain", async () => {
-  const swap = await linkedNotes();
-  await swap.edited("first [[Beta]] then [[Alpha]]");
-  const skip = { repairLinks: false };
-  await swap.vault.rename(swap.ids.alpha, "Alpha moving.md", undefined, skip);
-  await swap.vault.rename(swap.ids.beta, "Alpha.md", undefined, skip);
-  await swap.vault.rename(swap.ids.alpha, "Beta.md", undefined, skip);
-  expect(await swap.source(swap.ids.index)).toBe(
-    "first [[Beta]] then [[Alpha]]",
-  );
+/** What a plugin passes for a move Obsidian made: it rewrote the `.md` notes it indexes, and nothing else. */
+const unindexedOnly = (path: string) => !path.endsWith(".md");
 
-  const chain = await linkedNotes();
-  await chain.edited("first [[Beta]] then [[Gamma]]");
-  const beta = (await chain.vault.read()).notes.find(
-    (note) => note.id === chain.ids.beta,
-  );
+test.each([
+  ["false", false],
+  ["a predicate that leaves .md notes alone", unindexedOnly],
+] as const)(
+  "moves with repairLinks %s keep .md links an editor already rewrote, through a swap and a chain",
+  async (_, repairLinks) => {
+    const skip = { repairLinks };
+    const swap = await linkedNotes();
+    await swap.edited("first [[Beta]] then [[Alpha]]");
+    await swap.vault.rename(swap.ids.alpha, "Alpha moving.md", undefined, skip);
+    await swap.vault.rename(swap.ids.beta, "Alpha.md", undefined, skip);
+    await swap.vault.rename(swap.ids.alpha, "Beta.md", undefined, skip);
+    expect(await swap.source(swap.ids.index)).toBe(
+      "first [[Beta]] then [[Alpha]]",
+    );
+
+    const chain = await linkedNotes();
+    await chain.edited("first [[Beta]] then [[Gamma]]");
+    const beta = (await chain.vault.read()).notes.find(
+      (note) => note.id === chain.ids.beta,
+    );
+    if (!beta) throw new Error("Missing Beta");
+    await chain.vault.saveNote({ ...beta, path: "Gamma.md" }, skip);
+    await chain.vault.rename(chain.ids.alpha, "Beta.md", undefined, skip);
+    expect(await chain.source(chain.ids.index)).toBe(
+      "first [[Beta]] then [[Gamma]]",
+    );
+  },
+  30_000,
+);
+
+test("a repairLinks predicate repairs the linking notes it accepts and leaves the rest as written", async () => {
+  const { vault, ids, source } = await linkedNotes();
+  const mdx = crypto.randomUUID();
+  await vault.saveNote({ id: mdx, path: "Chart.mdx", source: "see [[Alpha]]" });
+  const asked: string[] = [];
+  await vault.rename(ids.alpha, "Zeta.md", undefined, {
+    repairLinks: (path) => {
+      asked.push(path);
+      return unindexedOnly(path);
+    },
+  });
+  expect(await source(mdx)).toBe("see [[/Zeta]]");
+  expect(await source(ids.index)).toBe("first [[Alpha]] then [[Beta]]");
+  expect(asked.toSorted()).toEqual(["Chart.mdx", "Index.md"]);
+
+  const beta = (await vault.read()).notes.find((note) => note.id === ids.beta);
   if (!beta) throw new Error("Missing Beta");
-  await chain.vault.saveNote({ ...beta, path: "Gamma.md" }, skip);
-  await chain.vault.rename(chain.ids.alpha, "Beta.md", undefined, skip);
-  expect(await chain.source(chain.ids.index)).toBe(
-    "first [[Beta]] then [[Gamma]]",
-  );
+  await vault.saveNote({ ...beta, path: "Delta.md" }, { repairLinks: true });
+  expect(await source(ids.index)).toBe("first [[Alpha]] then [[/Delta]]");
 }, 30_000);
 
 test("moves repair links by default, and re-target links an editor already rewrote when names swap", async () => {
