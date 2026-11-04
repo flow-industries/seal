@@ -1,6 +1,5 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import type { NoteDeviceCredentials } from "@flow-industries/id";
 import Dexie from "dexie";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { LINK_DEVICES } from "../src/app/flow-devices.ts";
@@ -12,11 +11,12 @@ import {
   type DeviceCheckpoint,
   type LinkPrompt,
   linkDevice,
+  type NoteDeviceCredentials,
   openDeviceVault,
-} from "../src/device/client.ts";
+} from "../src/index.ts";
 import { adminBrowser, fakeFlowId, host, memory } from "./device-fixture.ts";
 
-// `bun run test:node` bundles this for Node and runs it there, as the Obsidian plugin and agents run the device client.
+// `bun run test:node` bundles this for Node and runs it there, as a plugin or an agent ships the device client.
 Dexie.dependencies.indexedDB = new IDBFactory();
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 
@@ -63,10 +63,16 @@ test("a device links, writes and reads its note back under Node, at the release'
   const written = await openDeviceVault(seed, options);
   try {
     await written.sync();
+    const first = await written.saveNote({
+      id,
+      path: "From Node.md",
+      source: "# Written",
+    });
     await written.saveNote({
       id,
       path: "From Node.md",
       source: "# Written under Node",
+      ...first,
     });
     await written.sync();
   } finally {

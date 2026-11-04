@@ -37,8 +37,9 @@
     "check": "biome check --write",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "test:node": "rm -rf .tmp/node && tsc -p tsconfig.node.json && node .tmp/node/tests/device-node.js",
-    "test:package": "bun run build && node tests/package.mjs"
+    "test:node": "bun build tests/device-node.ts --target=node --outfile .tmp/device-node.mjs && node .tmp/device-node.mjs",
+    "test:package": "bun run build && node tests/package.mjs",
+    "size": "bun run scripts/device-bundle.ts"
   },
   "dependencies": {
     "@flow-industries/id": "0.34.0",
