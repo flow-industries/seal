@@ -1436,9 +1436,9 @@ export class VaultSession {
       throw new Error("Item is not an active note");
     const visible = decoded.filter((item) => !item.trashed);
     // A device's move of a view it didn't edit, made before a newer revision arrived, keeps that revision's text.
-    const viewedBase = base;
-    if (
-      previous &&
+    const view = base;
+    const renamesOnly =
+      !!previous &&
       source !== undefined &&
       !provenance &&
       !this.signsAsAdmin() &&
@@ -1447,8 +1447,8 @@ export class VaultSession {
         baseline.find((value) => value.id === id),
         source,
         base,
-      ))
-    ) {
+      ));
+    if (renamesOnly) {
       source = undefined;
       base = undefined;
     }
@@ -1544,7 +1544,7 @@ export class VaultSession {
     if (!row) throw new Error("Missing written note");
     this.wrote(id, base?.revision, row.revision);
     this.reportTrustLoss(lost);
-    return viewedBase && !base ? viewedBase : row;
+    return renamesOnly && view ? view : row;
   }
   /**
    * After a typed save that wrote nothing, the revision the caller's view

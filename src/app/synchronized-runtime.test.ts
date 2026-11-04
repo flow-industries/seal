@@ -121,6 +121,49 @@ test("fatal remote access failure locks immediately without discarding local pen
   reopened.lock();
 });
 
+test("access loss lets a listener save a draft before it wipes the key", async () => {
+  const { VaultAccessError } = await import("../sync/vault-snapshot.ts");
+  const { SYNC_LOCKED } = await import("./runtime.ts");
+  const key = await createVaultKey();
+  const vault = crypto.randomUUID();
+  const owner = "did:plc:flush-on-lock";
+  const session = createSession({ owner, vault, key });
+  let lost = false;
+  const transport: VaultSnapshotTransport = {
+    version: 2,
+    async readSnapshot() {
+      if (lost) throw new VaultAccessError("Vault format is newer");
+      return { cid: "initial", entries: [] };
+    },
+    async writeSnapshot() {
+      throw new Error("Must not publish after access loss");
+    },
+  };
+  const synchronized = synchronizedRuntime(session, async () => transport);
+  try {
+    await synchronized.sync?.();
+    const id = await session.create("draft.md");
+    synchronized.subscribe?.(async (status) => {
+      if (status === SYNC_LOCKED)
+        await synchronized.save({
+          id,
+          path: "draft.md",
+          kind: "md",
+          source: "unsaved draft",
+        });
+    });
+    lost = true;
+    await synchronized.sync?.();
+    await expect(session.open(id)).rejects.toThrow();
+    const reopened = createSession({ owner, vault, key });
+    expect(await reopened.open(id)).toBe("unsaved draft");
+    expect(await reopened.database.outbox.count()).toBeGreaterThan(0);
+    reopened.lock();
+  } finally {
+    key.fill(0);
+  }
+});
+
 test("access loss wipes the key after the flush limit even when a listener never settles", async () => {
   const { VaultAccessError } = await import("../sync/vault-snapshot.ts");
   const { SYNC_LOCKED } = await import("./runtime.ts");
