@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
-import { createRecoveryFile } from "../crypto/index.ts";
+import {
+  encryptedHeader,
+  legacyHeader,
+  passkeyVault,
+  signedVault,
+} from "../../tests/unlock-fixture.ts";
 import { createAccessRecipient, unwrapAccessKey } from "../crypto/access-v2.ts";
 import {
   createAccess,
@@ -12,17 +17,12 @@ import {
   UNTRUSTED_ACCESS,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
+import { createRecoveryFile } from "../crypto/index.ts";
 import type { RegisteredPasskey } from "../crypto/passkey-proof.ts";
 import {
   readVerifiedVaultRoot,
   type VaultRecordV2,
 } from "../sync/vault-transport.ts";
-import {
-  encryptedHeader,
-  legacyHeader,
-  passkeyVault,
-  signedVault,
-} from "../../tests/unlock-fixture.ts";
 import { localRuntime } from "./local-runtime.ts";
 import {
   MigrationConfirmationError,

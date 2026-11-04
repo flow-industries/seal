@@ -1,5 +1,4 @@
-import type { MarkdownConfig, MarkdownExtension } from "@lezer/markdown";
-import { noteGfm } from "../vault/table-syntax.ts";
+import type { MarkdownConfig } from "@lezer/markdown";
 
 const DOLLAR = 36;
 const BANG = 33;
@@ -162,27 +161,4 @@ function wikiEnd(cx: { char(pos: number): number; end: number }, pos: number) {
       return end + 2;
   }
   return -1;
-}
-
-/** NOTE's Markdown on top of lang-markdown's CommonMark language: `noteGfm`, then `noteMarkdown`. */
-export const noteExtensions: MarkdownExtension = [noteGfm, noteMarkdown];
-
-const MEDIA = /!\[\[[^\]\n]+\]\]|!\[[^\]\n]*\]\([^)\n]*\)/gu;
-
-/** Whether the text holds embeds or images and nothing else but whitespace. */
-export function mediaOnly(text: string) {
-  const rest = text.replace(MEDIA, "");
-  return rest !== text && !rest.trim();
-}
-
-/** Lines `from..to` (1-based, inclusive) of a frontmatter block at the top of the note, or null. */
-export function frontmatterLines(doc: {
-  lines: number;
-  line(number: number): { text: string };
-}): { first: number; last: number } | null {
-  if (!/^﻿?---\r?$/u.test(doc.line(1).text)) return null;
-  for (let number = 2; number <= Math.min(doc.lines, 500); number++)
-    if (/^(?:---|\.\.\.)\r?$/u.test(doc.line(number).text))
-      return { first: 1, last: number };
-  return null;
 }

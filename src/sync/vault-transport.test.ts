@@ -5,7 +5,6 @@ import { z } from "zod";
 import { passkeyVault, signedVault } from "../../tests/unlock-fixture.ts";
 import { SYNC_BLOCKED, SYNC_LOCKED, SYNC_PENDING } from "../app/runtime.ts";
 import { synchronizedRuntime } from "../app/synchronized-runtime.ts";
-import { createVaultKey } from "../crypto/index.ts";
 import {
   createSeedRecipient,
   type PinnedAccess,
@@ -19,6 +18,7 @@ import {
   encryptContainer,
   JOURNAL_PLAINTEXT_BYTES,
 } from "../crypto/container.ts";
+import { createVaultKey } from "../crypto/index.ts";
 import { createSession } from "../vault/session.ts";
 import { VaultDatabase } from "../vault/storage.ts";
 import { VaultSyncEngine } from "./vault-engine.ts";

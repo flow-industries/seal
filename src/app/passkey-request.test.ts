@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { credentialHash } from "../crypto/access-v2.ts";
-import {
-  passkeyRequestChallenge,
-  verifiesPasskeyAssertion,
-} from "../crypto/passkey-proof.ts";
 import {
   NOTE_ORIGIN,
   PASSKEY_RP_ID,
   softwarePasskey,
 } from "../../tests/passkey-authenticator.ts";
+import { credentialHash } from "../crypto/access-v2.ts";
+import {
+  passkeyRequestChallenge,
+  verifiesPasskeyAssertion,
+} from "../crypto/passkey-proof.ts";
 import {
   connectedPasskeyRequest,
   passkeyRecipient,

@@ -14,9 +14,18 @@ import type {
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import sodium from "libsodium-wrappers-sumo";
+import {
+  adminBrowser,
+  did,
+  fakeFlowId,
+  host,
+  memory,
+  uri,
+} from "../../tests/device-fixture.ts";
+import { noteEntry } from "../../tests/entry-fixture.ts";
+import { encryptedHeader, signedVault } from "../../tests/unlock-fixture.ts";
 import { AccessRemovedError } from "../app/runtime.ts";
 import { addVaultRecipient, linkedCheckpoint } from "../app/unlock.ts";
-import { decrypt } from "../crypto/index.ts";
 import {
   type AccessSigner,
   createSeedRecipient,
@@ -29,6 +38,7 @@ import {
   type EntrySigner,
   entrySigner,
 } from "../crypto/authorship.ts";
+import { decrypt } from "../crypto/index.ts";
 import {
   linkCommitment,
   matchesLinkCommitment,
@@ -36,18 +46,11 @@ import {
   typedPairingCode,
 } from "../crypto/link.ts";
 import type { SnapshotEntry } from "../sync/vault-snapshot.ts";
-import { AuthVaultTransport, type VaultRecordV2 } from "../sync/vault-transport.ts";
-import type { TrustLoss } from "../vault/session.ts";
 import {
-  adminBrowser,
-  did,
-  fakeFlowId,
-  host,
-  memory,
-  uri,
-} from "../../tests/device-fixture.ts";
-import { noteEntry } from "../../tests/entry-fixture.ts";
-import { encryptedHeader, signedVault } from "../../tests/unlock-fixture.ts";
+  AuthVaultTransport,
+  type VaultRecordV2,
+} from "../sync/vault-transport.ts";
+import type { TrustLoss } from "../vault/session.ts";
 import {
   createDeviceSeed,
   type DeviceCheckpointStore,

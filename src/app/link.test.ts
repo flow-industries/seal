@@ -2,6 +2,18 @@ import { describe, expect, spyOn, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import sodium from "libsodium-wrappers-sumo";
+import {
+  NOTE_ORIGIN,
+  PASSKEY_RP_ID,
+  type SoftwarePasskey,
+  softwarePasskey,
+} from "../../tests/passkey-authenticator.ts";
+import {
+  encryptedHeader,
+  legacyHeader,
+  passkeyVault,
+  signedVault,
+} from "../../tests/unlock-fixture.ts";
 import { openAccessSlot, v2PrfInput } from "../crypto/access-v2.ts";
 import {
   createSeedRecipient,
@@ -17,18 +29,6 @@ import {
   type VaultRecordV2,
 } from "../sync/vault-transport.ts";
 import type { TrustLoss } from "../vault/session.ts";
-import {
-  NOTE_ORIGIN,
-  PASSKEY_RP_ID,
-  type SoftwarePasskey,
-  softwarePasskey,
-} from "../../tests/passkey-authenticator.ts";
-import {
-  encryptedHeader,
-  legacyHeader,
-  passkeyVault,
-  signedVault,
-} from "../../tests/unlock-fixture.ts";
 import { localRuntime } from "./local-runtime.ts";
 import type { NoteRuntime } from "./runtime.ts";
 import {

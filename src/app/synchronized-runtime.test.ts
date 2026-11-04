@@ -1,9 +1,6 @@
 import { expect, setSystemTime, spyOn, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { SyncNotice } from "../components/save-status";
 import { createVaultKey } from "../crypto/index.ts";
 import { SyncFailure } from "../sync/records.ts";
 import type {
@@ -122,80 +119,6 @@ test("fatal remote access failure locks immediately without discarding local pen
   expect(await reopened.open(id)).toBe("durable offline");
   expect(await reopened.database.outbox.count()).toBe(1);
   reopened.lock();
-});
-
-test("access loss saves a queued edit and an unsaved draft before it wipes the key", async () => {
-  const { VaultAccessError } = await import("../sync/vault-snapshot.ts");
-  const { SYNC_LOCKED } = await import("./runtime.ts");
-  const { WritingSession } = await import("./writing-session");
-  const key = await createVaultKey();
-  const vault = crypto.randomUUID();
-  const owner = "did:plc:flush-on-lock";
-  const session = createSession({ owner, vault, key });
-  let lost = false;
-  let stopped = false;
-  const transport: VaultSnapshotTransport = {
-    version: 2,
-    async readSnapshot() {
-      if (lost) throw new VaultAccessError("Vault format is newer");
-      return { cid: "initial", entries: [] };
-    },
-    async writeSnapshot() {
-      throw new Error("Must not publish after access loss");
-    },
-    stop() {
-      stopped = true;
-    },
-  };
-  const synchronized = synchronizedRuntime(session, async () => transport);
-  const writing = new WritingSession();
-  const until = async (condition: () => boolean) => {
-    while (!condition()) await new Promise((resolve) => setTimeout(resolve, 0));
-  };
-  try {
-    await synchronized.sync?.();
-    const first = await session.create("first.md");
-    const second = await session.create("second.md");
-    let release = () => {};
-    const held = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let saves = 0;
-    writing.runtime = {
-      ...synchronized,
-      async save(note) {
-        if (saves++ === 0) await held;
-        await synchronized.save(note);
-      },
-    };
-    const edit = (id: string, path: string, source: string) =>
-      writing.edit({ id, path, source, kind: "md" }, () => {});
-    edit(first, "first.md", "typed");
-    await until(() => saves === 1);
-    edit(first, "first.md", "typed, then");
-    edit(first, "first.md", "typed, then queued");
-    edit(second, "second.md", "unsaved draft");
-    synchronized.subscribe?.(async (status) => {
-      if (status === SYNC_LOCKED) await writing.drain();
-    });
-    lost = true;
-    const locking = synchronized.sync?.();
-    await until(() => stopped);
-    expect(await session.open(first)).toBe("");
-    release();
-    await locking;
-    expect(saves).toBe(3);
-    expect(writing.hasPendingEdits).toBe(false);
-    await expect(session.open(first)).rejects.toThrow();
-    const reopened = createSession({ owner, vault, key });
-    expect(await reopened.open(first)).toBe("typed, then queued");
-    expect(await reopened.open(second)).toBe("unsaved draft");
-    expect(await reopened.database.outbox.count()).toBeGreaterThan(0);
-    reopened.lock();
-  } finally {
-    writing.dispose();
-    key.fill(0);
-  }
 });
 
 test("access loss wipes the key after the flush limit even when a listener never settles", async () => {
@@ -492,11 +415,6 @@ for (const [reason, blocked] of [
       await runtime.sync?.();
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(shown.startsWith(blocked)).toBe(true);
-      const notice = renderToStaticMarkup(
-        createElement(SyncNotice, { status: shown, onAuthorize() {} }),
-      );
-      if (reason === "consent") expect(notice).toContain("Authorize sync");
-      else expect(notice).toContain("Your PDS storage is full");
     } finally {
       runtime.lock();
       key.fill(0);

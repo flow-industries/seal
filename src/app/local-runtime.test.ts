@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { unzipSync, zipSync } from "fflate";
+import { createSearchIndex } from "../../tests/search-index.ts";
 import { createVaultKey } from "../crypto/index.ts";
 import { createSession } from "../vault/session.ts";
 import { localRuntime } from "./local-runtime.ts";
@@ -153,6 +154,7 @@ test("preferences persist encrypted with normal outbox and stay out of note surf
     owner: "did:plc:preferences",
     vault: crypto.randomUUID(),
     key,
+    createSearchIndex,
   };
   const session = createSession(options);
   const runtime = localRuntime(session);

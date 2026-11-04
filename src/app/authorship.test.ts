@@ -1,16 +1,16 @@
 import { expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
-import { createAccessRecipient } from "../crypto/access-v2.ts";
-import { createSeedRecipient } from "../crypto/access-v3.ts";
-import type { VaultRecordV2 } from "../sync/vault-transport.ts";
-import { VaultDatabase } from "../vault/storage.ts";
 import {
   encryptedHeader,
   legacyHeader,
   passkeyVault,
   signedVault,
 } from "../../tests/unlock-fixture.ts";
+import { createAccessRecipient } from "../crypto/access-v2.ts";
+import { createSeedRecipient } from "../crypto/access-v3.ts";
+import type { VaultRecordV2 } from "../sync/vault-transport.ts";
+import { VaultDatabase } from "../vault/storage.ts";
 import { localRuntime } from "./local-runtime.ts";
 import type { NoteRuntime } from "./runtime.ts";
 import {

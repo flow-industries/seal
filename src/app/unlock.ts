@@ -1,12 +1,5 @@
 import { z } from "zod";
 import {
-  createVaultKey,
-  type RecoveryFile,
-  type RecoveryFileV2,
-  recoverVaultKey,
-  recoverySeed,
-} from "../crypto/index.ts";
-import {
   ACCESS_SLOTS,
   type AccessRecipient,
   accessHeaderCommitment,
@@ -43,8 +36,19 @@ import {
   type VaultAccess,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
-import type { EntryRunner, EntrySigner, RunPolicy } from "../crypto/authorship.ts";
+import type {
+  EntryRunner,
+  EntrySigner,
+  RunPolicy,
+} from "../crypto/authorship.ts";
 import { decryptContainerRoot } from "../crypto/container.ts";
+import {
+  createVaultKey,
+  type RecoveryFile,
+  type RecoveryFileV2,
+  recoverVaultKey,
+  recoverySeed,
+} from "../crypto/index.ts";
 import { matchesLinkCommitment, sealLinkHandoff } from "../crypto/link.ts";
 import {
   PASSKEY_REQUEST_SKEW_MS,
@@ -62,7 +66,7 @@ import {
   type VaultRecordV2,
   vaultRecordSchema,
 } from "../sync/vault-transport.ts";
-import { createSession } from "../vault/session.ts";
+import { createSession, type SessionServices } from "../vault/session.ts";
 import { retireVaultDatabase, strandedEdits } from "../vault/storage.ts";
 import { LINK_DEVICES } from "./flow-devices.ts";
 import { flowIdAnswered } from "./flow-passkeys.ts";
@@ -188,6 +192,8 @@ interface VaultPort<Identity> {
    * anchor if the device is added again.
    */
   forget?(reason: "removed" | "revoked"): Promise<void>;
+  /** The preview planner and search index the app lends each session it opens. */
+  services?: SessionServices;
   runtime?(
     session: ReturnType<typeof createSession>,
     key: Uint8Array,
@@ -1452,6 +1458,7 @@ export async function openSession<Identity>(
       };
   }
   const session = createSession({
+    ...port.services,
     owner: did,
     vault: state.vault,
     key,

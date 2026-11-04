@@ -5,7 +5,11 @@ import {
   resolveNoteLink,
 } from "../links/index.ts";
 import { rebaseOutgoingLinks } from "../links/rename.ts";
-import { encodeLinkPath, linkRanges, rewriteLinkRanges } from "../vault/links.ts";
+import {
+  encodeLinkPath,
+  linkRanges,
+  rewriteLinkRanges,
+} from "../vault/links.ts";
 import { safeSegment } from "../vault/model.ts";
 import { attachmentMarkdown } from "./attachments.ts";
 import { readNoteMetadata } from "./metadata.ts";

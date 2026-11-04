@@ -1,6 +1,10 @@
 import { Unzip, UnzipInflate, zipSync } from "fflate";
 import { importLimits, type PortableFile } from "../vault/model.ts";
-import type { ContentSource, Provenance, VaultSession } from "../vault/session.ts";
+import type {
+  ContentSource,
+  Provenance,
+  VaultSession,
+} from "../vault/session.ts";
 import { readAttachmentFiles } from "../writing/attachments.ts";
 import type { ComposeRequest } from "../writing/composer.ts";
 import {

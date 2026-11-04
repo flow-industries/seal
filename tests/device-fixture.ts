@@ -7,7 +7,10 @@ import {
 } from "../src/app/unlock.ts";
 import { passkeyAdmin, type VaultRecipient } from "../src/crypto/access-v3.ts";
 import { CHUNK_BYTES } from "../src/crypto/container.ts";
-import { deviceAuthorizeMessage, normalizeUserCode } from "../src/crypto/link.ts";
+import {
+  deviceAuthorizeMessage,
+  normalizeUserCode,
+} from "../src/crypto/link.ts";
 import {
   AuthVaultTransport,
   type VaultOperation,

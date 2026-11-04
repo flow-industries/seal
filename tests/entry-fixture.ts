@@ -1,9 +1,9 @@
-import { encrypt } from "../src/crypto/index.ts";
 import {
   type EntryContext,
   type EntrySigner,
   signEntry,
 } from "../src/crypto/authorship.ts";
+import { encrypt } from "../src/crypto/index.ts";
 import type { SnapshotEntry } from "../src/sync/vault-snapshot.ts";
 import type { VaultItem } from "../src/vault/model.ts";
 

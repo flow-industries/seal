@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
+import { planPreviewAssets } from "../../tests/preview-planner.ts";
 import { localRuntime } from "../app/local-runtime.ts";
 import { createVaultKey } from "../crypto/index.ts";
-import { validExecutionInput } from "../render/protocol";
 import { mediaMime } from "../vault/model.ts";
 import { createSession } from "../vault/session.ts";
 import {
@@ -25,6 +25,7 @@ async function fixture() {
     owner: "did:plc:attachments",
     vault: crypto.randomUUID(),
     key: await createVaultKey(),
+    planPreviewAssets,
   });
   const runtime = localRuntime(session);
   const id = await session.create("Projects/Plan.md");
@@ -85,14 +86,6 @@ test("PDF signature detection is bounded and unsupported/spoofed files stay down
       [],
     )[0]?.markdown,
   ).toBe("[fake.png](attachments/fake.png)");
-  expect(
-    validExecutionInput({
-      source: "",
-      assets: [
-        { id: "pdf", mime: "application/pdf", bytes: pdf(), path: "a.pdf" },
-      ],
-    }),
-  ).toBe(true);
 });
 
 test("file-only transfer leaves ordinary text paste alone and file read failures do not mutate inputs", async () => {

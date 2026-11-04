@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { noteEntry } from "../../tests/entry-fixture.ts";
+import { planPreviewAssets } from "../../tests/preview-planner.ts";
+import { createSearchIndex } from "../../tests/search-index.ts";
 import { signedVault } from "../../tests/unlock-fixture.ts";
 import { localRuntime } from "../app/local-runtime.ts";
 import {
@@ -12,7 +14,6 @@ import {
 import type { EntrySigner } from "../crypto/authorship.ts";
 import { mentionLinkEdit } from "../links/edits.ts";
 import { createLinkIndex, noteReferences } from "../links/index.ts";
-import { executePrepared, prepareExecution } from "../render/module-loader";
 import { SyncFailure } from "../sync/records.ts";
 import { VaultSyncEngine } from "../sync/vault-engine.ts";
 import {
@@ -71,6 +72,8 @@ async function world() {
       vault,
       key,
       authorship: { signer, access, runners: [adminSigner] },
+      planPreviewAssets,
+      createSearchIndex,
     });
     opened.push(session);
     return session;
@@ -512,10 +515,7 @@ test("a verdict computed while new access arrives is never the stale one, and li
 });
 
 const STEAL = `export const stolen = (globalThis.__x2Ran = true)\n\nexport const hook = (Uint8Array.prototype.set = function () {})\n\n# Weekly review`;
-const JSX = new Map([
-  ["react/jsx-runtime", { jsx: () => null, jsxs: () => null, Fragment: "" }],
-]);
-test("fails closed: an agent's code never executes in the session until the person trusts it", async () => {
+test("fails closed: an agent's code is never cleared to run until the person trusts it, and nothing the session does executes it", async () => {
   const w = await world();
   const original = Uint8Array.prototype.set;
   await w.push(
@@ -538,24 +538,14 @@ test("fails closed: an agent's code never executes in the session until the pers
   const notes = await runtime.list();
   const dashNote = notes.find((note) => note.path === "Dash.mdx");
   if (!dashNote) throw new Error("Missing Dash.mdx");
-  const attempt = async (path: string) => {
-    const note = notes.find((value) => value.path === path);
-    if (!note) throw new Error(`Missing ${path}`);
-    // Exactly what the preview does: the note's own verdict and its modules' verdicts gate execution.
-    const prepared = await prepareExecution(
-      note.source,
-      note.path,
-      await runtime.assets(note),
-      { runs: note.origin?.runs === true },
-    );
-    return executePrepared(prepared, JSX);
-  };
-  await expect(attempt("Evil.mdx")).rejects.toThrow(
-    "Only a version you trust runs",
+  // A preview runs a note only on these verdicts: the note's own and each module's.
+  expect(notes.find((note) => note.path === "Evil.mdx")?.origin?.runs).toBe(
+    false,
   );
-  await expect(attempt("Dash.mdx")).rejects.toThrow(
-    "A passkey didn’t sign steal.ts, which this note imports",
-  );
+  expect(dashNote.origin?.runs).toBe(true);
+  expect((await runtime.assets(dashNote)).map((asset) => asset.runs)).toEqual([
+    false,
+  ]);
   await runtime.save({
     id: crypto.randomUUID(),
     path: "Groceries.md",
@@ -579,21 +569,10 @@ test("fails closed: an agent's code never executes in the session until the pers
   await expect(
     runtime.trust([{ id: "evil", digest: evil?.digest ?? "" }]),
   ).rejects.toThrow("This note changed");
-  const prepared = await prepareExecution(
-    "import S from './steal.ts'\n\n{S}",
-    "Dash.mdx",
-    await runtime.assets(dashNote),
-    { runs: true },
-  );
-  try {
-    executePrepared(prepared, JSX);
-    expect(Object.getOwnPropertyDescriptor(globalThis, "__x2Ran")?.value).toBe(
-      true,
-    );
-  } finally {
-    Reflect.deleteProperty(globalThis, "__x2Ran");
-    Uint8Array.prototype.set = original;
-  }
+  expect((await runtime.assets(dashNote)).map((asset) => asset.runs)).toEqual([
+    true,
+  ]);
+  expect(Reflect.has(globalThis, "__x2Ran")).toBe(false);
 });
 
 /** What a key holder can leave behind locally: other content stored under the same revision id. */

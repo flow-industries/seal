@@ -1,6 +1,6 @@
-import { markdownLanguage } from "@codemirror/lang-markdown";
 import { isMap, isNode, isScalar, parseDocument, stringify } from "yaml";
 import { z } from "zod";
+import { gfmParser } from "../vault/table-syntax.ts";
 import { maskMarkdownComments } from "./comments.ts";
 
 export interface FrontmatterRange {
@@ -184,7 +184,7 @@ export function readNoteMetadata(
   ];
   if (!candidates.length) return result;
   const excluded: { from: number; to: number }[] = [];
-  markdownLanguage.parser.parse(body).iterate({
+  gfmParser.parse(body).iterate({
     enter(node) {
       if (
         [

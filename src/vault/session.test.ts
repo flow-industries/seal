@@ -5,9 +5,20 @@ Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 
 import { expect, spyOn, test } from "bun:test";
+import { planPreviewAssets } from "../../tests/preview-planner.ts";
+import { createSearchIndex } from "../../tests/search-index.ts";
 import { createVaultKey } from "../crypto/index.ts";
 import type { VaultItem } from "./model.ts";
-import { createSession, VaultSession } from "./session.ts";
+import {
+  createSession as openSession,
+  type SessionOptions,
+  VaultSession,
+} from "./session.ts";
+
+/** Sessions here preview and search as an app's would, through stand-ins. */
+const createSession = (options: SessionOptions) =>
+  openSession({ planPreviewAssets, createSearchIndex, ...options });
+
 import type { StoredRevision } from "./storage.ts";
 
 test("same-path edits and preview refreshes reuse unrelated encrypted payloads", async () => {
@@ -778,10 +789,11 @@ test("lock between decryption and source caching cannot retain a completed plain
   const original: (
     stored: import("./storage.ts").StoredRevision,
     includeBytes?: boolean,
-  ) => Promise<import("./model.ts").VaultItem> = Object.getOwnPropertyDescriptor(
-    Object.getPrototypeOf(session),
-    "read",
-  )!.value;
+  ) => Promise<import("./model.ts").VaultItem> =
+    Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(session),
+      "read",
+    )!.value;
   Object.defineProperty(session, "read", {
     value: async (...args: Parameters<typeof original>) => {
       const item = await original.call(session, ...args);
@@ -848,6 +860,31 @@ test("one metadata snapshot binds active, trash and preference sources to their 
     });
     session.lock();
     await expect(snapshot.read(id)).rejects.toThrow("Vault locked");
+  } finally {
+    session.lock();
+    await session.database.delete();
+  }
+});
+
+test("a session without a planner or an index refuses previews and searches before decrypting anything", async () => {
+  const session = openSession({
+    owner: "did:plc:no-services",
+    vault: crypto.randomUUID(),
+    key: await createVaultKey(),
+  });
+  try {
+    const id = await session.create("Plan.md");
+    await session.save(id, "![[image.png]] orchard");
+    const reads = spyOn(session.database.items, "toArray");
+    const payloads = spyOn(session.database.items, "bulkGet");
+    await expect(session.assetsForNote(id)).rejects.toThrow(
+      "Preview unavailable",
+    );
+    await expect(session.search("orchard")).rejects.toThrow(
+      "Search unavailable",
+    );
+    expect(reads).not.toHaveBeenCalled();
+    expect(payloads).not.toHaveBeenCalled();
   } finally {
     session.lock();
     await session.database.delete();

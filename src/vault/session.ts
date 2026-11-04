@@ -19,8 +19,6 @@ import {
   parseEnvelope,
 } from "../crypto/index.ts";
 import { repairMovedNoteLinks } from "../links/rename.ts";
-import { LocalNoteSearch } from "../search/client";
-import { MAX_SEARCH_QUERY } from "../search/protocol";
 import { conflictName, draftAfterTombstone } from "../sync/conflicts.ts";
 import type { EncryptedRecord, RemoteRecord } from "../sync/records.ts";
 import {
@@ -48,14 +46,62 @@ import {
   safeSegment,
   type VaultItem,
 } from "./model.ts";
-import { revisionDigest, type StoredRevision, VaultDatabase } from "./storage.ts";
+import {
+  revisionDigest,
+  type StoredRevision,
+  VaultDatabase,
+} from "./storage.ts";
 
 interface PathPlan {
   name: string;
   parent: string | null;
   folders: VaultItem[];
 }
-export interface SessionOptions {
+/** An attachment a preview reads, as the planner selected it. */
+export type SelectedAsset = {
+  id: string;
+  mime: string;
+  bytes: Uint8Array;
+  path?: string;
+  paths?: string[];
+  canonicalPath?: string;
+  /** Whether this module's revision may run by itself, and that exact stored revision's digest; set on modules only. */
+  runs?: boolean;
+  digest?: string;
+};
+/**
+ * Picks the attachments a preview of `note` reads, reading each through
+ * `read` within `limit` bytes. Modules carry a `canonicalPath`, and the
+ * session then marks whether each may run. Planning never evaluates note code.
+ */
+export type PlanPreviewAssets = (
+  note: VaultItem,
+  source: string,
+  items: readonly VaultItem[],
+  read: (id: string, limit: number) => Promise<Uint8Array | null>,
+) => Promise<SelectedAsset[]>;
+/** The longest query `search` passes on; an index refuses longer ones. */
+export const MAX_SEARCH_QUERY = 256;
+/** A full-text index over decrypted notes, held only until the session locks. */
+export interface NoteSearchIndex {
+  update(delta: {
+    upsert: { id: string; path: string; source: string }[];
+    remove: string[];
+  }): Promise<void>;
+  search(query: string): Promise<{ id: string; line?: number }[]>;
+  lock(): void;
+}
+/**
+ * What a session borrows from the app hosting it. A device or agent needs
+ * neither: without a planner `assetsForNote` refuses, and without an index
+ * `search` does.
+ */
+export interface SessionServices {
+  planPreviewAssets?: PlanPreviewAssets;
+  /** A fresh, empty index; the session fills it on its first search. */
+  createSearchIndex?: () => NoteSearchIndex;
+}
+export interface SessionOptions extends SessionServices {
   owner: string;
   vault: string;
   key: Uint8Array;
@@ -220,7 +266,7 @@ export class VaultSession {
   private key: Uint8Array | null;
   private generation = 0;
   private storedCache = new Map<string, StoredRevision>();
-  private searchWorker: LocalNoteSearch | null = null;
+  private searchWorker: NoteSearchIndex | null = null;
   /**
    * Plaintext caches are keyed by the stored ciphertext itself, never by
    * revision: any key holder can reuse a revision id for other content, and
@@ -272,6 +318,8 @@ export class VaultSession {
       owner: options.owner,
       vault: options.vault,
       epoch: options.epoch,
+      planPreviewAssets: options.planPreviewAssets,
+      createSearchIndex: options.createSearchIndex,
     };
     this.key = options.key.slice();
     const signer = options.authorship?.signer;
@@ -1163,6 +1211,8 @@ export class VaultSession {
     return result.repairs;
   }
   async assetsForNote(id: string, sourceOverride?: string) {
+    const { planPreviewAssets } = this.options;
+    if (!planPreviewAssets) throw new Error("Preview unavailable");
     const generation = this.generation;
     const check = () => {
       if (!this.key || generation !== this.generation)
@@ -1178,7 +1228,6 @@ export class VaultSession {
     const stored = records.get(id);
     if (!note || !stored) throw new Error("Missing note");
     const source = sourceOverride ?? (await this.openStored(stored));
-    const { planPreviewAssets } = await import("../render/preview-plan");
     check();
     const assets = await planPreviewAssets(
       note,
@@ -2070,6 +2119,9 @@ export class VaultSession {
     );
   }
   search(query: string): Promise<NoteSearchHit[]> {
+    const { createSearchIndex } = this.options;
+    if (!createSearchIndex)
+      return Promise.reject(new Error("Search unavailable"));
     // The worker would refuse it, and its refusal reads as a failure that discards the index.
     if (query.length > MAX_SEARCH_QUERY)
       return Promise.reject(new Error("Search query too long"));
@@ -2077,7 +2129,7 @@ export class VaultSession {
     const result = this.searchQueue.then(() => {
       if (!this.key || generation !== this.generation)
         throw new Error("Vault locked");
-      return this.searchIndex(query).catch((error) => {
+      return this.searchIndex(query, createSearchIndex).catch((error) => {
         this.searchWorker?.lock();
         this.searchWorker = null;
         this.metadataCache.clear();
@@ -2094,7 +2146,10 @@ export class VaultSession {
     );
     return result;
   }
-  private async searchIndex(query: string): Promise<NoteSearchHit[]> {
+  private async searchIndex(
+    query: string,
+    createSearchIndex: () => NoteSearchIndex,
+  ): Promise<NoteSearchHit[]> {
     const generation = this.generation;
     const writes = writeStamp(this.database.name);
     if (this.searchWorker && this.indexedWrites === writes)
@@ -2141,7 +2196,7 @@ export class VaultSession {
     }
     if (!this.key || generation !== this.generation)
       throw new Error("Vault locked");
-    this.searchWorker ??= new LocalNoteSearch();
+    this.searchWorker ??= createSearchIndex();
     if (upsert.length || remove.length)
       await this.searchWorker.update({ upsert, remove });
     if (!this.key || generation !== this.generation)

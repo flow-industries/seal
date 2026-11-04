@@ -2,7 +2,11 @@
 import { strict as assert } from "node:assert";
 import { CarReader } from "@ipld/car";
 import { decode } from "@ipld/dag-cbor";
-import { CHUNK_BYTES, MAX_CHUNKS, ROOT_BYTES } from "../src/crypto/container.ts";
+import {
+  CHUNK_BYTES,
+  MAX_CHUNKS,
+  ROOT_BYTES,
+} from "../src/crypto/container.ts";
 
 const COLLECTION = "industries.flow.note.vault";
 const object = (value: unknown): Record<string, unknown> => {

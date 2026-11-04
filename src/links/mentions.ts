@@ -1,5 +1,9 @@
 import { noteMarkdown } from "../markdown/syntax.ts";
-import { excludedRanges, type SourceRange, tableRanges } from "../vault/links.ts";
+import {
+  excludedRanges,
+  type SourceRange,
+  tableRanges,
+} from "../vault/links.ts";
 import { markdownParser } from "../vault/table-syntax.ts";
 import type { IndexedNote } from "./index.ts";
 

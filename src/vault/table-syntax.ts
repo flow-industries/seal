@@ -1,4 +1,3 @@
-import { foldNodeProp } from "@codemirror/language";
 import {
   Autolink,
   type BlockContext,
@@ -6,6 +5,7 @@ import {
   parser as commonmark,
   type Element,
   Emoji,
+  GFM,
   type LeafBlock,
   type LeafBlockParser,
   type Line,
@@ -164,24 +164,17 @@ export const tableBlock: BlockParser = {
 };
 
 /**
- * GFM, Subscript, Superscript and Emoji, as lang-markdown's `markdownLanguage`
+ * GFM, Subscript, Superscript and Emoji, as CodeMirror's `markdownLanguage`
  * bundles them, with `tableBlock` as the table parser. It extends CommonMark
  * so Lezer's own table parser is never registered: once configured, its
  * `endLeaf` stays even when the parser is replaced, and it would split this
- * parser's tables and miscount CRLF rows.
+ * parser's tables and miscount CRLF rows. An editor adds its own node props,
+ * such as folding, as a further extension; props never change a parse.
  */
 export const noteGfm: MarkdownExtension = [
   {
     defineNodes: Table.defineNodes,
     parseBlock: [tableBlock],
-    props: [
-      foldNodeProp.add({
-        Table: (tree, state) => ({
-          from: state.doc.lineAt(tree.from).to,
-          to: tree.to,
-        }),
-      }),
-    ],
   },
   TaskList,
   Strikethrough,
@@ -193,3 +186,16 @@ export const noteGfm: MarkdownExtension = [
 
 /** `noteGfm` for code that reads notes' structure without NOTE's own syntax. */
 export const markdownParser = commonmark.configure(noteGfm);
+
+/**
+ * Lezer's own GFM with Subscript, Superscript and Emoji: exactly the parser
+ * CodeMirror's `markdownLanguage` wraps, without the editor's node props.
+ * Tags and comments are found with it, and its tables read CRLF rows
+ * differently from `noteGfm`, so swapping it would change which tags a note has.
+ */
+export const gfmParser = commonmark.configure([
+  GFM,
+  Subscript,
+  Superscript,
+  Emoji,
+]);

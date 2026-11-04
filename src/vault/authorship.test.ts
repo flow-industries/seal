@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { noteEntry } from "../../tests/entry-fixture.ts";
+import { planPreviewAssets } from "../../tests/preview-planner.ts";
 import { legacyHeader, signedVault } from "../../tests/unlock-fixture.ts";
 import { SYNC_LOCKED } from "../app/runtime.ts";
 import { synchronizedRuntime } from "../app/synchronized-runtime.ts";
@@ -18,7 +19,6 @@ import {
   type RunPolicy,
   signEntry,
 } from "../crypto/authorship.ts";
-import { prepareExecution } from "../render/module-loader";
 import { SyncFailure } from "../sync/records.ts";
 import { VaultSyncEngine } from "../sync/vault-engine.ts";
 import {
@@ -86,6 +86,7 @@ async function world() {
       vault,
       key,
       authorship: { signer, access: metadata, runners },
+      planPreviewAssets,
     });
     opened.push(session);
     return session;
@@ -613,17 +614,12 @@ test("an imported module attachment carries its own signature", async () => {
     assets.map(({ canonicalPath, runs }) => ({ canonicalPath, runs })),
   ).toEqual([{ canonicalPath: "view.ts", runs: false }]);
   expect((await originOf(session, "Dash.mdx")).origin?.runs).toBe(true);
-  await expect(
-    prepareExecution(source, "Dash.mdx", assets, { runs: true }),
-  ).rejects.toThrow("A passkey didn’t sign view.ts, which this note imports");
   const [view] = assets;
   await session.trust([{ id: view?.id ?? "", digest: view?.digest ?? "" }]);
   const trusted = await session.assetsForNote(id);
-  expect([
-    ...(
-      await prepareExecution(source, "Dash.mdx", trusted, { runs: true })
-    ).modules.keys(),
-  ]).toEqual(["Dash.mdx", "view.ts"]);
+  expect(
+    trusted.map(({ canonicalPath, runs }) => ({ canonicalPath, runs })),
+  ).toEqual([{ canonicalPath: "view.ts", runs: true }]);
 });
 
 test("a session over an unsigned root signs nothing and runs nothing, however it syncs", async () => {

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import sodium from "libsodium-wrappers-sumo";
-import { createRecoveryFile } from "../crypto/index.ts";
+import {
+  encryptedHeader,
+  legacyHeader,
+  passkeyVault,
+  signedVault,
+} from "../../tests/unlock-fixture.ts";
 import {
   accessHeaderCommitment,
   createAccessRecipient,
@@ -13,16 +18,11 @@ import {
   passkeyAdmin,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
+import { createRecoveryFile } from "../crypto/index.ts";
 import {
   readVerifiedVaultRoot,
   type VaultRecordV2,
 } from "../sync/vault-transport.ts";
-import {
-  encryptedHeader,
-  legacyHeader,
-  passkeyVault,
-  signedVault,
-} from "../../tests/unlock-fixture.ts";
 import { localRuntime } from "./local-runtime.ts";
 import { RecoveryConfirmationError } from "./runtime.ts";
 import {

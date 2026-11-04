@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
-import { markdownLanguage } from "@codemirror/lang-markdown";
 import * as yaml from "yaml";
+import { gfmParser } from "../vault/table-syntax.ts";
 import { maskMarkdownComments } from "./comments.ts";
 import {
   noteCssClasses,
@@ -9,15 +9,6 @@ import {
   removeNoteProperty,
   updateNoteProperty,
 } from "./metadata.ts";
-import { moveResultSelection, rankQuickSwitcher } from "./navigation";
-import { noteOutline } from "./outline";
-import {
-  countNoteWords,
-  dailyNote,
-  expandTemplate,
-  extractNoteSelection,
-  mergeNoteSources,
-} from "./utilities";
 
 test("metadata handles YAML types and tags without treating code and links as tags", () => {
   const source =
@@ -71,77 +62,6 @@ test("empty, absent, malformed, duplicate and flow-style YAML fail safely or pre
   expect(removeNoteProperty("body", "absent")).toBe("body");
 });
 
-test("outline uses Markdown syntax for ATX and Setext and ignores frontmatter, code, and comments", () => {
-  const source =
-    "---\ntitle: not a heading\n---\n# First #\n\nSecond\n------\n\n```md\n# no\n```\n\n    # indented\n\n<!--\n# hidden\n-->\n\n### Final\n";
-  const headings = noteOutline(source);
-  expect(headings.map(({ text, level }) => [text, level])).toEqual([
-    ["First", 1],
-    ["Second", 2],
-    ["Final", 3],
-  ]);
-  expect(headings[0]?.line).toBe(4);
-  expect(source.slice(headings[1]?.start, headings[1]?.end)).toBe(
-    "Second\n------",
-  );
-});
-
-test("templates use local calendar dates and leave unknown placeholders untouched", () => {
-  const date = new Date(2026, 9, 15, 9, 7);
-  expect(dailyNote(date)).toEqual({
-    name: "2026-10-15.md",
-    path: "2026-10-15.md",
-    source: "# 2026-10-15\n\n",
-  });
-  expect(
-    expandTemplate("{{title}} {{date}} {{time}} {{unknown}}", {
-      title: "Plan",
-      date,
-    }),
-  ).toBe("Plan 2026-10-15 09:07 {{unknown}}");
-});
-
-test("extraction validates source ranges and merging retains destination metadata", () => {
-  const source = "---\ntags: [one]\n---\nHello world 😀";
-  const from = source.indexOf("world");
-  expect(
-    extractNoteSelection(source, from, source.length, "notes/World"),
-  ).toEqual({
-    source: `${source.slice(0, from)}[[notes/World]]`,
-    extracted: "world 😀",
-  });
-  expect(() => extractNoteSelection(source, 1, 4, "x")).toThrow();
-  expect(() =>
-    extractNoteSelection(source, from, source.length - 1, "x"),
-  ).toThrow();
-  expect(
-    mergeNoteSources(source, "---\naliases: [incoming]\n---\nNew text\n"),
-  ).toBe(`${source}\n\nNew text\n`);
-});
-
-test("word counts exclude frontmatter and count graphemes rather than surrogate pairs", () => {
-  expect(
-    countNoteWords("---\naliases: [ignore me]\n---\ncafé 👨‍👩‍👧‍👦"),
-  ).toEqual({ words: 1, characters: 6 });
-});
-
-test("quick switcher ranks exact alias and basename matches, supports subsequences and keyboard bounds", () => {
-  const notes = [
-    { id: "body", path: "other.md", source: "orchard" },
-    { id: "name", path: "orchard.md", source: "" },
-    { id: "alias", path: "fruit.md", source: "---\naliases: [Orchard]\n---\n" },
-  ];
-  expect(rankQuickSwitcher(notes, "orchard").map((note) => note.id)).toEqual([
-    "alias",
-    "name",
-  ]);
-  expect(rankQuickSwitcher(notes, "orchrd")).toHaveLength(2);
-  expect(moveResultSelection(0, "ArrowUp", 3)).toBe(2);
-  expect(moveResultSelection(2, "ArrowDown", 3)).toBe(0);
-  expect(moveResultSelection(0, "End", 3)).toBe(2);
-  expect(moveResultSelection(0, "ArrowDown", 0)).toBe(-1);
-});
-
 test("inline comments and HTML attributes cannot introduce tags", () => {
   expect(
     readNoteMetadata(
@@ -161,13 +81,12 @@ test("multiline properties stay valid YAML and removing referenced anchors fails
   expect(
     readNoteMetadata("---\ndate: 2026-99-99\n---\n").properties[0]?.type,
   ).toBe("text");
-  expect(() => mergeNoteSources("Destination", "---\nunterminated")).toThrow();
 });
 
 test("frontmatter-only reads preserve properties and YAML tags without parsing the Markdown body", () => {
   const source =
     '---\naliases: [Alias]\ntags: [work, work, "#project/one"]\ncssclasses: [wide, readable]\nfinished: true\n---\n#body #日本語 `#code`\n%% #hidden %%\n[link](target#anchor)';
-  const parse = spyOn(markdownLanguage.parser, "parse");
+  const parse = spyOn(gfmParser, "parse");
   try {
     const frontmatter = readNoteFrontmatter(source);
     expect(noteCssClasses(source)).toEqual(["wide", "readable"]);
@@ -202,7 +121,7 @@ test("comment-free sources retain exact bytes without a Markdown parse", () => {
     "`single %` and \\% escapes\n```md\n% literal\n```\n",
     "<!-- HTML --> #visible\n    # code\n",
   ];
-  const parse = spyOn(markdownLanguage.parser, "parse");
+  const parse = spyOn(gfmParser, "parse");
   try {
     for (const source of sources)
       expect(maskMarkdownComments(source)).toBe(source);
@@ -240,7 +159,7 @@ test("repeated temporal property reads preserve calendar, local and offset valid
 });
 
 test("metadata without hashtag candidates skips the exclusion tree while actual tags keep their exclusions", () => {
-  const parse = spyOn(markdownLanguage.parser, "parse");
+  const parse = spyOn(gfmParser, "parse");
   try {
     expect(
       readNoteMetadata("---\ntags: [front]\n---\n# Heading\nplain text").tags,

@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { accessHeaderCommitment, accessSlotsSchema } from "../crypto/access-v2.ts";
+import {
+  accessHeaderCommitment,
+  accessSlotsSchema,
+} from "../crypto/access-v2.ts";
 import {
   acceptAccess,
   accessSaltFor,

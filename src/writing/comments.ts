@@ -1,4 +1,4 @@
-import { markdownLanguage } from "@codemirror/lang-markdown";
+import { gfmParser } from "../vault/table-syntax.ts";
 
 /** Replaces Obsidian comments with spaces while retaining UTF-16 offsets and line breaks. */
 export function maskMarkdownComments(source: string): string {
@@ -10,7 +10,7 @@ export function maskMarkdownComments(source: string): string {
     );
   if (frontmatter?.index === 0)
     excluded.push({ from: 0, to: frontmatter[0].length });
-  markdownLanguage.parser.parse(source).iterate({
+  gfmParser.parse(source).iterate({
     enter(node) {
       if (["FencedCode", "CodeBlock", "InlineCode"].includes(node.name)) {
         excluded.push({ from: node.from, to: node.to });

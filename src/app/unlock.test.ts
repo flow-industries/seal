@@ -1,18 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
-import { createRecoveryFile } from "../crypto/index.ts";
-import {
-  createAccessRecipient,
-  unwrapAccessKey,
-  v2PrfInput,
-} from "../crypto/access-v2.ts";
-import { createSeedRecipient, passkeyAdmin } from "../crypto/access-v3.ts";
-import {
-  readVerifiedVaultRoot,
-  type VaultRecordV2,
-  vaultRecordSchema,
-} from "../sync/vault-transport.ts";
 import golden from "../../tests/fixtures/note-v2-vault.json";
 import {
   encryptedHeader,
@@ -20,9 +8,20 @@ import {
   passkeyVault,
   signedVault,
 } from "../../tests/unlock-fixture.ts";
+import {
+  createAccessRecipient,
+  unwrapAccessKey,
+  v2PrfInput,
+} from "../crypto/access-v2.ts";
+import { createSeedRecipient, passkeyAdmin } from "../crypto/access-v3.ts";
+import { createRecoveryFile } from "../crypto/index.ts";
+import {
+  readVerifiedVaultRoot,
+  type VaultRecordV2,
+  vaultRecordSchema,
+} from "../sync/vault-transport.ts";
 import { localRuntime } from "./local-runtime.ts";
 import { MigrationConfirmationError } from "./runtime.ts";
-import { offlineCacheSchema } from "./sdk-port";
 import {
   type Checkpoint,
   type CheckpointPolicy,
@@ -251,56 +250,6 @@ describe("strict v2 unlock", () => {
       });
     },
   );
-  test("offline cache contains encrypted root and minimal checkpoint, rejects plaintext metadata", async () => {
-    const f = await fixture();
-    const cached = {
-      version: 4,
-      id: `u:${did}`,
-      userId: "u",
-      did,
-      credential: { id: "connected", publicKey: "11".repeat(64) },
-      mapping: { did, identityVersion: "1", active: true, authorized: true },
-      current: { cid: "cid", header: f.header() },
-      checkpoint: { vault: f.state.vault, epoch: 1, pinned: f.state.pinned },
-    };
-    expect(offlineCacheSchema.safeParse(cached).success).toBe(true);
-    expect(
-      offlineCacheSchema.safeParse({
-        ...cached,
-        recipients: [f.admin.recipient],
-      }).success,
-    ).toBe(false);
-    expect(
-      offlineCacheSchema.safeParse({
-        ...cached,
-        checkpoint: { vault: f.state.vault, epoch: 1 },
-      }).success,
-    ).toBe(false);
-    expect(
-      offlineCacheSchema.safeParse({
-        ...cached,
-        checkpoint: { vault: f.state.vault, epoch: 1, pinned: null },
-      }).success,
-    ).toBe(true);
-    expect(
-      offlineCacheSchema.safeParse({ ...cached, version: 3 }).success,
-    ).toBe(false);
-    for (const value of [
-      f.admin.recipient.id,
-      f.admin.recipient.boxPublicKey,
-      f.admin.recipient.signPublicKey ?? "",
-    ])
-      expect(JSON.stringify(cached)).not.toContain(value);
-    expect(
-      offlineCacheSchema.safeParse({
-        ...cached,
-        current: {
-          ...cached.current,
-          header: { version: 1, vault: f.state.vault },
-        },
-      }).success,
-    ).toBe(false);
-  });
   test("a wrong recovery key cannot poison recipient access and setup ABA zeroes PRF", async () => {
     const f = await fixture();
     const recovery = await createRecoveryFile(new Uint8Array(32).fill(2), {

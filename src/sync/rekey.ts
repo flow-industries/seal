@@ -7,7 +7,11 @@ import {
   parseEnvelope,
 } from "../crypto/index.ts";
 import { revisionDigest } from "../vault/storage.ts";
-import { decodeBlob, encodeBlob, type SnapshotEntry } from "./vault-snapshot.ts";
+import {
+  decodeBlob,
+  encodeBlob,
+  type SnapshotEntry,
+} from "./vault-snapshot.ts";
 
 export interface EpochKey {
   key: Uint8Array;

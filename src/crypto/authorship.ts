@@ -1,7 +1,11 @@
 import sodium from "libsodium-wrappers-sumo";
 import { z } from "zod";
 import { encoded32 } from "./access-v2.ts";
-import { encoded64, type RootMetadata, type VaultRecipient } from "./access-v3.ts";
+import {
+  encoded64,
+  type RootMetadata,
+  type VaultRecipient,
+} from "./access-v3.ts";
 import type { Envelope } from "./index.ts";
 
 const encoder = new TextEncoder();

@@ -1,17 +1,17 @@
-import type { RecoveryFile, RecoveryFileV2 } from "../crypto/index.ts";
 import type { VaultRecipient } from "../crypto/access-v3.ts";
 import type { RevisionOrigin } from "../crypto/authorship.ts";
-import type { SelectedAsset } from "@/render/protocol";
+import type { RecoveryFile, RecoveryFileV2 } from "../crypto/index.ts";
 import type { UnsealedEntry } from "../sync/rekey.ts";
 import type {
   ContentSource,
   Provenance,
   RevisionRef,
+  SelectedAsset,
   TrustLoss,
 } from "../vault/session.ts";
 import type { AttachmentInsertion } from "../writing/attachments.ts";
-import type { WritingPreferences } from "../writing/preferences.ts";
 import type { ComposeRequest } from "../writing/composer.ts";
+import type { WritingPreferences } from "../writing/preferences.ts";
 export interface NoteView {
   id: string;
   path: string;
