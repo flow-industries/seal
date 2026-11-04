@@ -1423,7 +1423,8 @@ export class VaultSession {
   }
   /**
    * Moves a note, repairing links to it, or an attachment, whose links stay
-   * as written. `base`, when given, must name the stored row.
+   * as written. `base`, when given, must name the stored row. A move to the
+   * path the item already has writes nothing and resolves with its row.
    */
   async rename(
     id: string,
@@ -1490,6 +1491,8 @@ export class VaultSession {
       throw new Error("Item is not an active attachment");
     if (!previous && !bytes) throw new Error("Missing attachment");
     const samePath = !!previous && paths(visible).get(id) === path;
+    // A move to where it already is changes nothing, and rewriting it would drop another admin's signature.
+    if (!bytes && samePath && stored) return this.baseOf(stored);
     const lost = noLoss();
     let content = bytes;
     let view: RevisionBase | undefined;
@@ -1650,6 +1653,10 @@ export class VaultSession {
     if (previous && (previous.kind !== "note" || previous.trashed))
       throw new Error("Item is not an active note");
     const visible = decoded.filter((item) => !item.trashed);
+    if (mode === "rename" && paths(visible).get(id) === path) {
+      const row = baseline.find((value) => value.id === id);
+      if (row) return this.baseOf(row);
+    }
     // A device's move of a view it didn't edit, made before a newer revision arrived, keeps that revision's text.
     const view = base;
     const renamesOnly =

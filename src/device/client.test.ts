@@ -914,6 +914,38 @@ describe("a device vault's writes follow the session's carry rules", () => {
     expect(await vault.listAttachments()).toEqual([]);
   }, 30_000);
 
+  test("a move to the path an item already has writes nothing, so another admin's code keeps its signature", async () => {
+    const { vault, losses, entry, replace, row, view, owner, ids } =
+      await carried();
+    await replace(
+      await entry(
+        owner,
+        { id: "mod", name: "view.ts", kind: "asset", mime: "text/javascript" },
+        "export default 'admin'",
+      ),
+    );
+    await vault.sync();
+    const note = await row("a");
+    const module = await row("mod");
+    expect(module).toMatchObject({ signer: ids.owner });
+    const shown = await view("A.mdx");
+    expect(await vault.rename("a", "A.mdx")).toEqual({
+      revision: shown.revision ?? "",
+      digest: shown.digest ?? "",
+    });
+    const [listed] = await vault.listAttachments();
+    if (!listed) throw new Error("Missing attachment");
+    const { revision, digest } = listed;
+    expect(await vault.rename("mod", "view.ts", { revision, digest })).toEqual({
+      revision,
+      digest,
+    });
+    expect(await row("a")).toEqual(note);
+    expect(await row("mod")).toEqual(module);
+    expect((await view("A.mdx")).origin?.runs).toBe(true);
+    expect(losses).toEqual([]);
+  }, 30_000);
+
   test("hands out origin verdicts no caller can rewrite", async () => {
     const { vault, losses, view } = await carried();
     const { origin: a } = await view("A.mdx");
