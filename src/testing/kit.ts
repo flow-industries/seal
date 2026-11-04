@@ -1,7 +1,7 @@
 /**
- * Flow ID, its PDS and an approving passkey browser, all in memory, so a
- * plugin or agent can run a whole device link, then sync against a vault,
- * without a server. Synthetic keys only; nothing here is for production.
+ * The in-memory Flow ID kit with its insides exposed, for this package's own
+ * tests. Plugins use `./index.ts`, whose types are the supported surface.
+ * Synthetic keys only; nothing here is for production.
  */
 import sodium from "libsodium-wrappers-sumo";
 import { localRuntime } from "../app/local-runtime.ts";

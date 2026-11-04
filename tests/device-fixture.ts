@@ -6,4 +6,4 @@ export {
   TEST_DID as did,
   TEST_HOST as host,
   TEST_VAULT_URI as uri,
-} from "../src/testing/index.ts";
+} from "../src/testing/kit.ts";

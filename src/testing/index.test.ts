@@ -46,7 +46,7 @@ async function linkedDevice(
     host: TEST_HOST,
     credentials: memoryStore<NoteDeviceCredentials>(),
     checkpoints: memoryStore<DeviceCheckpoint>(),
-    fetch: admin.note.fetch,
+    fetch: admin.flowId.fetch,
     ...(indexedDB && { indexedDB }),
   };
   const shown = Promise.withResolvers<LinkPrompt>();
@@ -111,7 +111,7 @@ test("a device and the passkey's notepad exchange notes and attachments through 
   expect(await vault.readAttachment(attachment)).toEqual(
     new Uint8Array([1, 2, 3]),
   );
-  expect(admin.note.violations).toEqual([]);
+  expect(admin.flowId.violations).toEqual([]);
 }, 30_000);
 
 test("two devices on one origin keep separate databases, and deleting one's storage leaves the other's", async () => {
@@ -261,6 +261,12 @@ test("passkey sessions keep today's database names, and deleting a device's stor
   expect(databaseName("did:plc:x", vault, 3)).toBe(
     `flow-note:did:plc:x:${vault}:3`,
   );
+  expect(() => databaseName("did:plc:x", `${vault}#device`, 1)).toThrow(
+    "Invalid vault database name",
+  );
+  expect(() => databaseName("did:plc:x#y", vault, 1, "device")).toThrow(
+    "Invalid vault database name",
+  );
   const key = await createVaultKey();
   for (const epoch of [1, 2]) {
     const session = createSession({ owner: "did:plc:x", vault, key, epoch });
@@ -283,11 +289,13 @@ test("passkey sessions keep today's database names, and deleting a device's stor
     source: "kept",
   });
   notepad.lock();
-  const passkey = `flow-note:${TEST_DID}:${admin.state.vault}`;
   const own = (await createSeedRecipient(device.seed, "device")).id;
-  expect(await vaultDatabases()).toEqual(
-    expect.arrayContaining([passkey, `${passkey}#${own}`]),
+  const names = await vaultDatabases();
+  const passkey = names.find((name) => !name.includes("#")) ?? "";
+  expect(passkey).toMatch(
+    new RegExp(`^flow-note:${TEST_DID}:[0-9a-f-]{36}$`, "u"),
   );
+  expect(names.toSorted()).toEqual([passkey, `${passkey}#${own}`]);
   for (const vault of opened.splice(0)) vault.stop();
   await deleteDeviceStorage(device.seed);
   expect(await vaultDatabases()).toContain(passkey);
