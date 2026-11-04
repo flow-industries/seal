@@ -3,9 +3,6 @@ import { test } from "node:test";
 import Dexie from "dexie";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { LINK_DEVICES } from "../src/app/flow-devices.ts";
-import { addVaultRecipient } from "../src/app/unlock.ts";
-import { seedRecipientFromKeys } from "../src/crypto/access-v3.ts";
-import { typedPairingCode } from "../src/crypto/link.ts";
 import {
   createDeviceSeed,
   type DeviceCheckpoint,
@@ -14,13 +11,19 @@ import {
   type NoteDeviceCredentials,
   openDeviceVault,
 } from "../src/index.ts";
-import { adminBrowser, fakeFlowId, host, memory } from "./device-fixture.ts";
+import {
+  adminBrowser,
+  approveLink,
+  fakeFlowId,
+  memoryStore,
+  TEST_HOST,
+} from "../src/testing/index.ts";
 
 // `bun run test:node` bundles this for Node and runs it there, as a plugin or an agent ships the device client.
 Dexie.dependencies.indexedDB = new IDBFactory();
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 
-test("a device links, writes and reads its note back under Node, at the release's switches", async () => {
+test("a device links, writes and reads its note and attachment back under Node, at the release's switches", async () => {
   assert.equal(process.versions.bun, undefined);
   assert.equal("document" in globalThis, false);
   assert.equal(LINK_DEVICES, true);
@@ -28,9 +31,9 @@ test("a device links, writes and reads its note back under Node, at the release'
   const admin = await adminBrowser(note);
   const seed = createDeviceSeed();
   const options = {
-    host,
-    credentials: memory<NoteDeviceCredentials>(),
-    checkpoints: memory<DeviceCheckpoint>(),
+    host: TEST_HOST,
+    credentials: memoryStore<NoteDeviceCredentials>(),
+    checkpoints: memoryStore<DeviceCheckpoint>(),
     fetch: note.fetch,
   };
   const shown = Promise.withResolvers<LinkPrompt>();
@@ -39,27 +42,12 @@ test("a device links, writes and reads its note back under Node, at the release'
     label: "Build agent",
     onPrompt: shown.resolve,
   });
-  const prompt = await shown.promise;
-  const pending = note.lookup(prompt.userCode);
-  // The approving tab at the release's own switches, as `/link` runs it.
-  await addVaultRecipient(admin.port, {
-    recipient: await seedRecipientFromKeys(
-      "device",
-      pending.boxPublicKey ?? "",
-      pending.signPublicKey ?? "",
-      pending.label ?? "",
-    ),
-    link: {
-      secret: typedPairingCode(prompt.pairingCode),
-      commitment: pending.commitment ?? "",
-      approve: async () => note.approve(prompt.userCode),
-      revoke: async () => {},
-    },
-    confirm: async () => {},
-  });
+  // The approving tab at the release's own switches, as the link page runs it.
+  await approveLink(admin, await shown.promise);
   assert.equal((await linking).trust, "handed");
 
   const id = crypto.randomUUID();
+  const attachment = crypto.randomUUID();
   const written = await openDeviceVault(seed, options);
   try {
     await written.sync();
@@ -73,6 +61,11 @@ test("a device links, writes and reads its note back under Node, at the release'
       path: "From Node.md",
       source: "# Written under Node",
       ...first,
+    });
+    await written.saveAttachment({
+      id: attachment,
+      path: "From Node.bin",
+      bytes: new Uint8Array([4, 5, 6]),
     });
     await written.sync();
   } finally {
@@ -89,6 +82,10 @@ test("a device links, writes and reads its note back under Node, at the release'
     assert.deepEqual(
       notes.map(({ id, path, source }) => ({ id, path, source })),
       [{ id, path: "From Node.md", source: "# Written under Node" }],
+    );
+    assert.deepEqual(
+      [...(await reopened.readAttachment(attachment))],
+      [4, 5, 6],
     );
   } finally {
     reopened.stop();

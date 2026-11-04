@@ -45,7 +45,15 @@ vault.stop();
 
 `saveNote` resolves with the revision the saved content now has; pass it to the next save as `revision` and `digest`. A save on a revision the device can't place throws `NoteChangedError`: read the note again and reapply the edit. Moving an older view the person didn't edit only renames the note and keeps the newer text.
 
-The device client hands out only the session's own operations: read, save, rename, trash, merge or extract, and sync. It never exposes raw entries, keys or a signer.
+Attachments follow the same rules. `listAttachments()` lists them without their bytes (`id`, `path`, `mime`, `size`, `revision`, `digest`), `readAttachment(id)` returns one's bytes, and `saveAttachment({ id, path, bytes, revision, digest })` resolves with the new revision. `rename` and `remove` take a note or an attachment. Moving a note rewrites the links to it; moving an attachment leaves them as written, so save the notes that link to it.
+
+The device client hands out only the session's own operations: read, save, rename, trash, merge or extract, and sync. It never exposes raw entries, keys or a signer. It signs only what the device itself wrote: moving, trashing or merging another admin's code writes it unsigned and reports a `TrustLoss`.
+
+Each seed keeps its own local database, so two linked devices on one origin, such as two vaults in one desktop app, never share an outbox. When a device is unlinked, call `stop()` and then `deleteDeviceStorage(seed)`; edits not yet synced go with it.
+
+### Test without a server
+
+`@flow-industries/seal/testing` runs a whole link in memory: `fakeFlowId()` is Flow ID and the PDS, `adminBrowser(flowId)` is a passkey's browser with a new vault, `approveLink(admin, prompt)` approves a device as the link page does, `openAdminVault(admin)` opens the passkey's own notepad to write and read notes, and `memoryStore()` stands in for the keychain. Pass `TEST_HOST` as the host and `flowId.fetch` as `fetch`. It uses synthetic keys and is never part of the device entry.
 
 ### Runtime requirements
 
@@ -55,7 +63,7 @@ The device client hands out only the session's own operations: read, save, renam
 
 ## Modules
 
-The root export is the device client. Every other module is importable on its own subpath, mirroring the source tree:
+The root export, the device client, and `testing` are the package's stable API. The vault core NOTE itself builds on is importable under `internal/`, mirroring the source tree, with no stability promise between versions:
 
 | Subpath | Holds |
 | --- | --- |
@@ -67,7 +75,7 @@ The root export is the device client. Every other module is importable on its ow
 | `app/*` | unlock (passkey, recovery and seed), runtimes, Flow ID device and passkey lists |
 | `links/*`, `writing/*`, `markdown/*` | link rewriting on rename, metadata and tags, merge and extract, the note dialect |
 
-For example, `import { createSession } from "@flow-industries/seal/vault/session"`. A session's host lends it a preview planner and a search index through `SessionServices`; without them `assetsForNote` and `search` refuse.
+For example, `import { createSession } from "@flow-industries/seal/internal/vault/session"`. A session's host lends it a preview planner and a search index through `SessionServices`; without them `assetsForNote` and `search` refuse.
 
 ## Security model
 

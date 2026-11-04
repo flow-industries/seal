@@ -5,7 +5,7 @@
     "": {
       "name": "@flow-industries/seal",
       "dependencies": {
-        "@flow-industries/id": "0.34.0",
+        "@flow-industries/id": "^0.36.0",
         "@lezer/markdown": "1.8.0",
         "dexie": "^4.4.6",
         "fflate": "^0.8.3",
@@ -62,7 +62,7 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.12", "", {}, "sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww=="],
 
-    "@flow-industries/id": ["@flow-industries/id@0.34.0", "", { "dependencies": { "@flow-industries/ui": "^0.27.0", "@opentelemetry/api": "1.9.1", "jose": "^6.1.3", "lucide-react": "^0.563.0", "zod": "^4.3.6" }, "peerDependencies": { "@tanstack/react-start": ">=1.168.0", "@wagmi/core": ">=3.0.0", "ox": ">=0.14.0", "react": ">=18", "react-dom": ">=18", "viem": ">=2.47.10" }, "optionalPeers": ["@tanstack/react-start", "@wagmi/core", "react", "react-dom"] }, "sha512-p6kMtQ+N6nvp5+EY22L1RI1ZBlxaumrFieA8C9LSkyUL9xGkENMVJwBsYl5pJGFo8oTQ8SEQn6KB/F9PO1grWw=="],
+    "@flow-industries/id": ["@flow-industries/id@0.36.0", "", { "dependencies": { "@flow-industries/ui": "^0.27.0", "@opentelemetry/api": "1.9.1", "jose": "^6.1.3", "lucide-react": "^0.563.0", "zod": "^4.3.6" }, "peerDependencies": { "@tanstack/react-start": ">=1.168.0", "@wagmi/core": ">=3.0.0", "ox": ">=0.14.0", "react": ">=18", "react-dom": ">=18", "viem": ">=2.47.10" }, "optionalPeers": ["@tanstack/react-start", "@wagmi/core", "react", "react-dom"] }, "sha512-27tJOQE/q9E+9ikhfKjsSVL3duirScQpO5Wcr/3OLOtVB+GF5jl1sapX5xaC2uG9LqXCrm1IyOU89ayo3NziBQ=="],
 
     "@flow-industries/lint": ["@flow-industries/lint@0.3.1", "", {}, "sha512-oKTw7fMCZBlshRixumpXrUJUmbJx3HqiGs72F43d920yy1fCtOuAjlnbY8SXBZZ7TnEibuYY2FVjAZcQSg6COQ=="],
 

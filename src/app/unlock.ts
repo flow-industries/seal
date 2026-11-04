@@ -194,6 +194,8 @@ interface VaultPort<Identity> {
   forget?(reason: "removed" | "revoked"): Promise<void>;
   /** The preview planner and search index the app lends each session it opens. */
   services?: SessionServices;
+  /** This holder's local database namespace (`SessionOptions.storage`). */
+  storage?: string;
   runtime?(
     session: ReturnType<typeof createSession>,
     key: Uint8Array,
@@ -1448,17 +1450,21 @@ export async function openSession<Identity>(
   let stranded: UnlockResult["stranded"];
   if (last?.vault === state.vault && last.epoch < state.epoch) {
     const { epoch } = last;
-    const count = await retireVaultDatabase(did, state.vault, epoch).catch(
-      () => 0,
-    );
+    const count = await retireVaultDatabase(
+      did,
+      state.vault,
+      epoch,
+      port.storage,
+    ).catch(() => 0);
     if (count)
       stranded = {
         count,
-        download: () => strandedEdits(did, state.vault, epoch),
+        download: () => strandedEdits(did, state.vault, epoch, port.storage),
       };
   }
   const session = createSession({
     ...port.services,
+    storage: port.storage,
     owner: did,
     vault: state.vault,
     key,

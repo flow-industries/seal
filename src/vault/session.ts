@@ -39,6 +39,7 @@ import {
   exportFiles,
   type ItemKind,
   importFiles,
+  mediaMime,
   newId,
   obsidianExport,
   type PortableFile,
@@ -106,6 +107,8 @@ export interface SessionOptions extends SessionServices {
   vault: string;
   key: Uint8Array;
   epoch?: number;
+  /** Separates this holder's local database from others for the same vault on one origin (`databaseName`). */
+  storage?: string;
   /**
    * Who signs this session's writes, which recipients verify signatures and
    * whose admin signatures run by themselves (the unlock decides, knowing how
@@ -180,6 +183,19 @@ export interface ListedNote extends NoteSummary {
   created: string;
   modified: string;
 }
+/** An attachment outside the trash, without its bytes. */
+export interface AssetSummary {
+  id: string;
+  path: string;
+  mime: string;
+  /** Plaintext bytes, read from the encrypted chunks' lengths without decrypting them. */
+  size: number;
+  revision: string;
+  digest: string;
+}
+/** XChaCha20-Poly1305's tag, which each encrypted attachment chunk carries. */
+const CHUNK_TAG_BYTES = 16;
+const MIME = /^[a-z0-9!#$&^_.+-]{1,127}\/[a-z0-9!#$&^_.+-]{1,127}$/iu;
 export interface NoteSearchHit extends NoteSummary {
   /** The one-based line of the task the query matched. */
   line?: number;
@@ -320,6 +336,7 @@ export class VaultSession {
       epoch: options.epoch,
       planPreviewAssets: options.planPreviewAssets,
       createSearchIndex: options.createSearchIndex,
+      storage: options.storage,
     };
     this.key = options.key.slice();
     const signer = options.authorship?.signer;
@@ -341,6 +358,7 @@ export class VaultSession {
       options.owner,
       options.vault,
       options.epoch,
+      options.storage,
     );
   }
   /** Adopts the access a sync verified, against which every signature is checked from now on. */
@@ -956,6 +974,58 @@ export class VaultSession {
   async listNotes(): Promise<ListedNote[]> {
     return (await this.readMetadata()).notes;
   }
+  async listAssets(): Promise<AssetSummary[]> {
+    const generation = this.generation;
+    const baseline = await this.storedItems();
+    const active = (await this.metadata(baseline)).filter(
+      (item) => !item.trashed,
+    );
+    const index = paths(active);
+    const rows = new Map(baseline.map((row) => [row.id, row]));
+    const assets: AssetSummary[] = [];
+    for (const item of active) {
+      const row = rows.get(item.id);
+      const path = index.get(item.id);
+      if (item.kind !== "asset" || !row || !path || isInternalWritingPath(path))
+        continue;
+      assets.push({
+        id: item.id,
+        path,
+        mime: item.mime ?? "application/octet-stream",
+        size: await this.plaintextLength(row),
+        ...(await this.baseOf(row)),
+      });
+    }
+    if (!this.key || generation !== this.generation)
+      throw new Error("Vault locked");
+    return assets;
+  }
+  /** An attachment's length; a chunked one's from each chunk's ciphertext, which is its plaintext and tag. */
+  private async plaintextLength(row: StoredRevision): Promise<number> {
+    if (!row.chunkHashes?.length) {
+      const { bytes } = await this.read(row);
+      bytes.fill(0);
+      return bytes.length;
+    }
+    return (row.encryptedBlobs ?? []).reduce(
+      (sum, blob) =>
+        sum +
+        Math.floor((parseEnvelope(blob).ciphertext.length * 3) / 4) -
+        CHUNK_TAG_BYTES,
+      0,
+    );
+  }
+  /** An attachment's bytes, as a copy the caller may zero. */
+  async openAsset(id: string): Promise<Uint8Array> {
+    const stored = await this.database.items.get(id);
+    if (!stored) throw new Error("Missing attachment");
+    const item = await this.read(stored);
+    if (item.kind !== "asset" || item.trashed) {
+      item.bytes.fill(0);
+      throw new Error("Item is not an active attachment");
+    }
+    return item.bytes;
+  }
   async open(id: string): Promise<string> {
     const stored = await this.database.items.get(id);
     if (!stored) throw new Error("Missing note");
@@ -1343,8 +1413,115 @@ export class VaultSession {
   private async baseOf(row: StoredRevision): Promise<RevisionBase> {
     return { revision: row.revision, digest: await this.digestOf(row) };
   }
-  async rename(id: string, path: string): Promise<void> {
-    await this.writeNote(id, path, undefined, "rename");
+  /** Moves a note, repairing links to it, or an attachment, whose links stay as written. */
+  async rename(id: string, path: string): Promise<RevisionBase> {
+    const stored = await this.database.items.get(id);
+    if (stored && (await this.read(stored, false)).kind === "asset")
+      return this.writeAsset(id, path, undefined);
+    return this.writeNote(id, path, undefined, "rename");
+  }
+  /**
+   * Writes an attachment's bytes at `path`, as `saveNote` writes a note's
+   * source: `base` names the revision the caller's copy came from, a device
+   * or agent signs only bytes it changed, and an unedited older copy saved
+   * to a new path only moves it. `mime` defaults to what the bytes show,
+   * else the attachment's earlier type.
+   */
+  async saveAsset(
+    id: string,
+    path: string,
+    bytes: Uint8Array,
+    base?: RevisionBase,
+    mime?: string,
+  ): Promise<RevisionBase> {
+    if (mime !== undefined && !MIME.test(mime))
+      throw new Error("Invalid attachment type");
+    return this.writeAsset(id, path, bytes, base, mime);
+  }
+  private async writeAsset(
+    id: string,
+    path: string,
+    bytes: Uint8Array | undefined,
+    base?: RevisionBase,
+    mime?: string,
+  ): Promise<RevisionBase> {
+    if (/\.mdx?$/iu.test(path) || isInternalWritingPath(path))
+      throw new Error("This path is reserved for notes and preferences.");
+    const baseline = await this.storedItems();
+    const visible = (await this.metadata(baseline)).filter(
+      (item) => !item.trashed,
+    );
+    const stored = baseline.find((row) => row.id === id);
+    const previous = stored && (await this.read(stored));
+    if (previous && (previous.kind !== "asset" || previous.trashed))
+      throw new Error("Item is not an active attachment");
+    if (!previous && !bytes) throw new Error("Missing attachment");
+    const samePath = !!previous && paths(visible).get(id) === path;
+    const lost = noLoss();
+    let content = bytes;
+    let view: RevisionBase | undefined;
+    let vouched: boolean;
+    if (!previous || !stored) vouched = true;
+    else if (!content) vouched = await this.carries(lost, previous, stored);
+    else if (this.signsAsAdmin()) {
+      const edited = { ...previous, bytes: content };
+      vouched = await this.vouchesDerived(lost, edited, stored, {}, base);
+      // Unchanged bytes rewritten unsigned would only drop the signature they carry.
+      if (
+        !vouched &&
+        samePath &&
+        sameBytes(content, previous.bytes) &&
+        (await this.heldCode(previous, stored))
+      )
+        return this.baseOf(stored);
+    } else {
+      const edited = { ...previous, bytes: content };
+      const typed = await this.typedHere(edited, stored, base);
+      if (typed === "unchanged") {
+        if (samePath) return this.unchangedBase(edited, stored, base);
+        // A device's move of a copy it didn't edit, made before a newer revision arrived, keeps that revision's bytes.
+        if (!sameBytes(content, previous.bytes)) view = base;
+        content = undefined;
+        vouched = await this.carries(lost, previous, stored);
+      } else {
+        vouched = typed === "typed";
+        if (!vouched && (await this.heldCode(previous, stored)))
+          lost.unsigned.push(previous.name);
+      }
+    }
+    const { name, parent, folders } = this.folderForPath(path, visible);
+    const timestamp = new Date().toISOString();
+    const item: VaultItem = {
+      ...(previous ?? {
+        id,
+        kind: "asset" as const,
+        createdAt: timestamp,
+        bytes: new Uint8Array(),
+      }),
+      name,
+      parent,
+      updatedAt: timestamp,
+    };
+    if (content) {
+      const sniffed = mediaMime(content);
+      item.bytes = content.slice();
+      item.mime =
+        mime ??
+        (sniffed === "application/octet-stream" && previous?.mime
+          ? previous.mime
+          : sniffed);
+    }
+    const written = await this.commitPathChanges(
+      baseline,
+      [...visible.filter((value) => value.id !== id), ...folders, item],
+      [...folders, item],
+      new Map([...authored(folders), [id, vouched]]),
+    );
+    const row = written.get(id);
+    if (!row) throw new Error("Missing written attachment");
+    this.wrote(id, view ? undefined : base?.revision, row.revision);
+    this.reportTrustLoss(lost);
+    return view ?? row;
   }
   /** Without `provenance` the person typed `source`; the note keeps the trust it had. */
   /**

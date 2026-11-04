@@ -8,6 +8,7 @@ import {
   NoteTransportError,
   pollNoteDeviceToken,
 } from "@flow-industries/id";
+import Dexie from "dexie";
 import sodium from "libsodium-wrappers-sumo";
 import { z } from "zod";
 import type { NoteView, StrandedEdits, SyncListener } from "../app/runtime.ts";
@@ -41,6 +42,7 @@ import {
   vaultRecordSchema,
 } from "../sync/vault-transport.ts";
 import type {
+  AssetSummary,
   RevisionBase,
   TrustLoss,
   VaultSession,
@@ -101,6 +103,18 @@ export type DeviceNote = Pick<
   NoteView,
   "id" | "path" | "source" | "revision" | "digest"
 >;
+/** An attachment as `DeviceVault.listAttachments` lists it: everything but its bytes. */
+export type DeviceAttachment = AssetSummary;
+/** An attachment to save; an existing one's `revision` and `digest` name the revision the device's copy came from. */
+export interface DeviceAttachmentWrite {
+  id: string;
+  path: string;
+  bytes: Uint8Array;
+  /** Defaults to the type the bytes show, else the attachment's earlier type. */
+  mime?: string;
+  revision?: string;
+  digest?: string;
+}
 /**
  * The linked notepad, through a seed session's own operations only. Every
  * write is signed as this device only when it is the device's own typing,
@@ -122,8 +136,25 @@ export interface DeviceVault {
    * saved without a revision this device can place throws `NoteChangedError`.
    */
   saveNote(note: DeviceNote): Promise<RevisionBase>;
-  rename(id: string, path: string): Promise<void>;
-  /** Moves the note to the trash. */
+  /** Every attachment outside the trash, without its bytes. */
+  listAttachments(): Promise<DeviceAttachment[]>;
+  /** An attachment's bytes, as a copy the caller may zero. */
+  readAttachment(id: string): Promise<Uint8Array>;
+  /**
+   * Saves an attachment's bytes at `path` under the same rules as
+   * `saveNote`: it resolves with the revision the bytes now have, a move of
+   * an older copy the device didn't change only moves it, and an existing
+   * attachment saved without a revision this device can place throws
+   * `NoteChangedError`. Paths ending in `.md` or `.mdx` are notes.
+   */
+  saveAttachment(attachment: DeviceAttachmentWrite): Promise<RevisionBase>;
+  /**
+   * Moves a note or an attachment and resolves with its new revision. A
+   * note's move rewrites the links to it; an attachment's leaves them as
+   * written, so save the notes that link to it.
+   */
+  rename(id: string, path: string): Promise<RevisionBase>;
+  /** Moves a note or an attachment to the trash. */
   remove(id: string): Promise<void>;
   compose(request: ComposeRequest): Promise<{ selectedId: string }>;
   /** Writes sync on their own; this syncs now. */
@@ -137,6 +168,18 @@ export interface DeviceVault {
   stranded?: StrandedEdits;
   /** Wipes the vault and signing keys; writes not yet synced wait in the local database for the next open. */
   stop(): void;
+}
+/**
+ * Deletes every local database this seed's vault sessions wrote, in every
+ * epoch, with any edits not yet synced. Call it after `stop()` when the
+ * device is unlinked; it never touches the PDS or another seed's databases,
+ * which `openDeviceVault` names by each seed's recipient id.
+ */
+export async function deleteDeviceStorage(seed: Uint8Array): Promise<void> {
+  const suffix = `#${(await createSeedRecipient(seed, "device")).id}`;
+  for (const name of await Dexie.getDatabaseNames())
+    if (name.startsWith("flow-note:") && name.endsWith(suffix))
+      await Dexie.delete(name);
 }
 /**
  * A save named no revision of an existing note that this device can place,
@@ -293,22 +336,13 @@ export async function handedCheckpoint(
   }
 }
 
-/**
- * What this device asks Flow ID to link: its public keys, the commitment to
- * its secret, and its signature over both. `NoteDeviceRequest` names the last
- * two from SDK 0.36.0; until NOTE moves to it they travel through the
- * request unchanged.
- */
-type AuthorizeRequest = NoteDeviceRequest & {
-  commitment: string;
-  proof: string;
-};
+/** What this device asks Flow ID to link: its public keys, the commitment to its secret, and its signature over both. */
 async function authorizeRequest(
   seed: Uint8Array,
   kind: NoteDeviceKind,
   label: string,
   secret: string,
-): Promise<AuthorizeRequest> {
+): Promise<NoteDeviceRequest> {
   const recipient = await createSeedRecipient(seed, kind, label);
   const keys = {
     kind,
@@ -516,6 +550,7 @@ export async function openDeviceVault(
       await options.onRemoved?.(reason);
     },
     runners,
+    storage: own.id,
     runtime(session, key, state) {
       const transport = new AuthVaultTransport(rpc, {
         key,
@@ -557,11 +592,19 @@ function sessionVault(
       if (!(await session.places(note.id, base))) throw new NoteChangedError();
       return session.saveNote(note.id, note.path, note.source, undefined, base);
     },
+    listAttachments: () => session.listAssets(),
+    readAttachment: (id) => session.openAsset(id),
+    async saveAttachment({ id, path, bytes, mime, revision, digest }) {
+      if (stopped) throw new Error("Vault locked");
+      const base = revision && digest ? { revision, digest } : undefined;
+      if (!(await session.places(id, base))) throw new NoteChangedError();
+      return session.saveAsset(id, path, bytes, base, mime);
+    },
     async rename(id, path) {
       if (stopped) throw new Error("Vault locked");
       if (isInternalWritingPath(path))
         throw new Error("This path is reserved for vault preferences.");
-      await session.rename(id, path);
+      return session.rename(id, path);
     },
     remove: (id) => runtime.remove(id),
     compose: (request) => runtime.compose(request),

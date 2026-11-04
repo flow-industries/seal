@@ -6,7 +6,7 @@ This file provides guidance to agents working with code in this repository.
 
 ## Layout
 
-`src/` mirrors the module tree NOTE consumes, one public subpath per module (`@flow-industries/seal/vault/session`). `src/index.ts` is the device client's entry. A session's preview planner and search index are injected (`SessionServices`), never imported: nothing under `src/` may reach Babel, MDX, CodeMirror, React or a worker. `bun run size` fails if the device bundle does.
+`src/index.ts` is the device client's entry and `src/testing/` the in-memory Flow ID kit: these two are the stable API, held by semver. Every module is also reachable as `@flow-industries/seal/internal/<path>` for NOTE, with no stability promise; `src/` mirrors the tree NOTE consumes. A session's preview planner and search index are injected (`SessionServices`), never imported: nothing under `src/` may reach Babel, MDX, CodeMirror, React or a worker. `bun run size` fails if the device bundle does.
 
 Imports are relative with a `.ts` extension; `tsc` rewrites them to `.js` in `dist/`.
 

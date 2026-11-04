@@ -66,12 +66,21 @@ function encryptedBytes(entry: StoredRevision) {
 /**
  * Each epoch's ciphertext lives in its own database, so a session never reads
  * or publishes an envelope sealed under another epoch's key. Epoch 1 keeps the
- * name every vault had before rotation existed.
+ * name every vault had before rotation existed. A `namespace` (a linked
+ * device's recipient id) keeps holders that share an origin, such as two
+ * plugin vaults in one app, from sharing one outbox.
  */
-function databaseName(owner: string, vault: string, epoch: number): string {
-  return epoch > 1
-    ? `flow-note:${owner}:${vault}:${epoch}`
-    : `flow-note:${owner}:${vault}`;
+export function databaseName(
+  owner: string,
+  vault: string,
+  epoch: number,
+  namespace?: string,
+): string {
+  const name =
+    epoch > 1
+      ? `flow-note:${owner}:${vault}:${epoch}`
+      : `flow-note:${owner}:${vault}`;
+  return namespace ? `${name}#${namespace}` : name;
 }
 /**
  * Clears an earlier epoch's database once nothing in it waits to sync, and
@@ -84,9 +93,11 @@ export async function retireVaultDatabase(
   owner: string,
   vault: string,
   epoch: number,
+  namespace?: string,
 ): Promise<number> {
-  if (!(await Dexie.exists(databaseName(owner, vault, epoch)))) return 0;
-  const database = new VaultDatabase(owner, vault, epoch);
+  if (!(await Dexie.exists(databaseName(owner, vault, epoch, namespace))))
+    return 0;
+  const database = new VaultDatabase(owner, vault, epoch, namespace);
   try {
     return await database.transaction(
       "rw",
@@ -116,9 +127,11 @@ export async function pendingWrites(
   owner: string,
   vault: string,
   epoch: number,
+  namespace?: string,
 ): Promise<number> {
-  if (!(await Dexie.exists(databaseName(owner, vault, epoch)))) return 0;
-  const database = new VaultDatabase(owner, vault, epoch);
+  if (!(await Dexie.exists(databaseName(owner, vault, epoch, namespace))))
+    return 0;
+  const database = new VaultDatabase(owner, vault, epoch, namespace);
   try {
     return await database.outbox.count();
   } finally {
@@ -130,8 +143,9 @@ export async function strandedEdits(
   owner: string,
   vault: string,
   epoch: number,
+  namespace?: string,
 ): Promise<Blob> {
-  const database = new VaultDatabase(owner, vault, epoch);
+  const database = new VaultDatabase(owner, vault, epoch, namespace);
   try {
     const rows = await database.outbox.toArray();
     return new Blob(
@@ -185,8 +199,8 @@ export class VaultDatabase extends Dexie {
   outbox!: Table<PendingWrite, string>;
   history!: Table<HistoryRevision, string>;
   historyState!: Table<HistoryState, string>;
-  constructor(owner: string, vault: string, epoch = 1) {
-    super(databaseName(owner, vault, epoch));
+  constructor(owner: string, vault: string, epoch = 1, namespace?: string) {
+    super(databaseName(owner, vault, epoch, namespace));
     this.version(1).stores({
       items: "id",
       outbox: "id",

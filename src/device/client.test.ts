@@ -507,9 +507,12 @@ describe("a device vault's writes follow the session's carry rules", () => {
     const { vault, view } = await carried();
     expect(Object.keys(vault).sort()).toEqual([
       "compose",
+      "listAttachments",
       "read",
+      "readAttachment",
       "remove",
       "rename",
+      "saveAttachment",
       "saveNote",
       "stop",
       "subscribe",
@@ -786,6 +789,129 @@ describe("a device vault's writes follow the session's carry rules", () => {
     await vault.saveNote({ ...older, path: "Sub/Plain.md", ...moved });
     expect((await row("plain"))?.revision).toBe(plain?.revision);
     expect(losses).toEqual([]);
+  }, 30_000);
+
+  test("saves, lists, reads, moves and trashes attachments under the notes' rules", async () => {
+    const { vault, losses, row, view } = await carried();
+    const png = new Uint8Array(300_000);
+    png.set([137, 80, 78, 71, 13, 10, 26, 10]);
+    png[299_999] = 7;
+    const id = crypto.randomUUID();
+    const first = await vault.saveAttachment({
+      id,
+      path: "Assets/plot.png",
+      bytes: png,
+    });
+    expect(await vault.listAttachments()).toEqual([
+      {
+        id,
+        path: "Assets/plot.png",
+        mime: "image/png",
+        size: 300_000,
+        ...first,
+      },
+    ]);
+    expect(await vault.readAttachment(id)).toEqual(png);
+    // The next save names the returned revision; the type stays when new bytes don't show one.
+    const edited = new Uint8Array([1, 2, 3]);
+    const next = await vault.saveAttachment({
+      id,
+      path: "Assets/plot.png",
+      bytes: edited,
+      ...first,
+    });
+    expect(next).not.toEqual(first);
+    expect(await vault.readAttachment(id)).toEqual(edited);
+    expect((await vault.listAttachments())[0]).toMatchObject({
+      mime: "image/png",
+      size: 3,
+    });
+    await expect(
+      vault.saveAttachment({ id, path: "Assets/plot.png", bytes: png }),
+    ).rejects.toBeInstanceOf(NoteChangedError);
+    await expect(
+      vault.saveAttachment({
+        id: crypto.randomUUID(),
+        path: "Assets/plot.md",
+        bytes: png,
+      }),
+    ).rejects.toThrow("reserved for notes");
+    const moved = await vault.rename(id, "Elsewhere/plot.png");
+    expect((await vault.listAttachments())[0]).toMatchObject({
+      path: "Elsewhere/plot.png",
+      ...moved,
+    });
+    // A move isn't typing, so it carries no signature, as a note's doesn't.
+    expect(await row(id)).toMatchObject({ name: "plot.png", signer: null });
+    // A note's move still resolves with its new revision.
+    const target = await view("Target.md");
+    const renamed = await vault.rename(target.id, "Moved/Target.md");
+    const shown = await view("Moved/Target.md");
+    expect(renamed).toEqual({
+      revision: shown.revision ?? "",
+      digest: shown.digest ?? "",
+    });
+    await vault.remove(id);
+    expect(await vault.listAttachments()).toEqual([]);
+    await expect(vault.readAttachment(id)).rejects.toThrow(
+      "not an active attachment",
+    );
+    expect(losses.every((loss) => !loss.unsigned.length)).toBe(true);
+  }, 30_000);
+
+  test("never signs another admin's attachment: moving or trashing it writes it unsigned and says so, and an older copy is refused", async () => {
+    const { vault, losses, entry, replace, row, owner, ids } = await carried();
+    const module = (source: string, revision?: string) =>
+      entry(
+        owner,
+        {
+          id: "mod",
+          name: "view.ts",
+          kind: "asset",
+          mime: "text/javascript",
+          revisionCounter: revision ? 2 : 1,
+        },
+        source,
+        revision,
+      );
+    await replace(await module("export default 'admin'"));
+    await vault.sync();
+    const [listed] = await vault.listAttachments();
+    expect(listed).toMatchObject({ id: "mod", path: "view.ts", size: 22 });
+    expect(await row("mod")).toMatchObject({ signer: ids.owner });
+    await replace(await module("export default 'admin, newer'", "mod-2"));
+    await vault.sync();
+    // Attachments keep no local history, so a copy older than the stored bytes can't be placed.
+    await expect(
+      vault.saveAttachment({
+        id: "mod",
+        path: "Code/view.ts",
+        bytes: new TextEncoder().encode("export default 'admin'"),
+        revision: listed?.revision,
+        digest: listed?.digest,
+      }),
+    ).rejects.toBeInstanceOf(NoteChangedError);
+    expect(await row("mod")).toMatchObject({
+      revision: "mod-2",
+      signer: ids.owner,
+    });
+    expect(losses).toEqual([]);
+    const moved = await vault.rename("mod", "Code/view.ts");
+    expect(new TextDecoder().decode(await vault.readAttachment("mod"))).toBe(
+      "export default 'admin, newer'",
+    );
+    expect(await row("mod")).toMatchObject({ signer: null });
+    expect(losses).toEqual([{ unsigned: ["view.ts"], stale: [] }]);
+    // Bytes the device writes itself carry its own signature, which never runs as an admin's.
+    await vault.saveAttachment({
+      id: "mod",
+      path: "Code/view.ts",
+      bytes: new TextEncoder().encode("export default 'device'"),
+      ...moved,
+    });
+    expect(await row("mod")).toMatchObject({ signer: ids.device });
+    await vault.remove("mod");
+    expect(await vault.listAttachments()).toEqual([]);
   }, 30_000);
 
   test("hands out origin verdicts no caller can rewrite", async () => {

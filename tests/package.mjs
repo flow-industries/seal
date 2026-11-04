@@ -20,10 +20,15 @@ assert.ok(!subpaths.some((path) => path.endsWith(".test")), "tests shipped");
 // unbundled, so the device entry is only checked bundled (`test:node`).
 const needsBundler = new Set(["device/client"]);
 for (const path of subpaths)
-  if (!needsBundler.has(path)) await import(`@flow-industries/seal/${path}`);
+  if (!needsBundler.has(path))
+    await import(`@flow-industries/seal/internal/${path}`);
+const { memoryStore } = await import("@flow-industries/seal/testing");
+const store = memoryStore();
+await store.write({ kept: true });
+assert.deepEqual(await store.read(), { kept: true });
 
 const { createVaultKey, decrypt, encrypt } = await import(
-  "@flow-industries/seal/crypto/index"
+  "@flow-industries/seal/internal/crypto/index"
 );
 const key = await createVaultKey();
 const context = {

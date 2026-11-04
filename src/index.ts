@@ -1,7 +1,8 @@
 /**
  * The device client: link a plugin or agent to a vault through the browser,
  * then open it as a local session that syncs over Flow ID's device token.
- * Everything else in the package is under its module's own subpath.
+ * `@flow-industries/seal/testing` runs a link without a server; the
+ * `internal/*` subpaths are the app's, with no stability promise.
  */
 export type {
   NoteDeviceCredentialStore,
@@ -30,11 +31,14 @@ export {
 export type { EntryRunner, RevisionOrigin } from "./crypto/authorship.ts";
 export {
   createDeviceSeed,
+  type DeviceAttachment,
+  type DeviceAttachmentWrite,
   type DeviceCheckpoint,
   type DeviceCheckpointStore,
   type DeviceNote,
   type DeviceOptions,
   type DeviceVault,
+  deleteDeviceStorage,
   handedCheckpoint,
   LINK_EXPIRED,
   LINK_UNVERIFIED,

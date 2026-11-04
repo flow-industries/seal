@@ -20,7 +20,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./*": {
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./internal/*": {
       "types": "./dist/*.d.ts",
       "default": "./dist/*.js"
     }
@@ -41,7 +45,7 @@
     "size": "bun run scripts/device-bundle.ts"
   },
   "dependencies": {
-    "@flow-industries/id": "0.34.0",
+    "@flow-industries/id": "^0.36.0",
     "@lezer/markdown": "1.8.0",
     "dexie": "^4.4.6",
     "fflate": "^0.8.3",
