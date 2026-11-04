@@ -1133,6 +1133,8 @@ describe("a migration write that keeps failing", () => {
     const a = browser(pds, host);
     await stuckVault(pds, a);
     const other = await unlockVault(await a.port(), {}, false);
+    // The race below must run its own sync, not join the one the runtime starts when it opens.
+    await other.runtime.sync?.();
     const records = pds.rpc.records.bind(pds.rpc);
     let raced = false;
     pds.rpc.records = async (operation) => {
