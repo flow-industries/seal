@@ -6,7 +6,7 @@ This file provides guidance to agents working with code in this repository.
 
 ## Layout
 
-`src/index.ts` is the device client's entry and `src/testing/` the in-memory Flow ID kit: these two are the stable API, held by semver. Every module is also reachable as `@flow-industries/seal/internal/<path>` for NOTE, with no stability promise; `src/` mirrors the tree NOTE consumes. A session's preview planner and search index are injected (`SessionServices`), never imported: nothing under `src/` may reach Babel, MDX, CodeMirror, React or a worker. `bun run size` fails if the device bundle does.
+`src/index.ts` is the device client's entry and `src/testing/` the in-memory Flow ID kit: these two are the only supported API, held by semver. Every module is also reachable as `@flow-industries/seal/internal/<path>` for NOTE alone, with no semver promise; `src/` mirrors the tree NOTE consumes. A session's preview planner and search index are injected (`SessionServices`), never imported: nothing under `src/` may reach Babel, MDX, CodeMirror, React or a worker. `bun run size` fails if the device bundle does.
 
 Imports are relative with a `.ts` extension; `tsc` rewrites them to `.js` in `dist/`.
 
@@ -31,4 +31,4 @@ Use Bun 1.4.2 (`bun x bun@1.4.2 install --frozen-lockfile`). Run `bun run lint`,
 
 ## Publishing
 
-The package publishes to npm automatically when `version` in `package.json` changes on `main`: `.github/workflows/publish.yml` publishes that exact version through npm trusted publishing (GitHub OIDC, no token). Never run `npm publish` by hand, and never rename `publish.yml`, which the trusted publisher on npmjs.com names. A merge without a version change publishes nothing.
+The package publishes to npm automatically when `version` in `package.json` changes on `main`: `.github/workflows/publish.yml` publishes that exact version through npm trusted publishing (GitHub OIDC, no token). Never run `npm publish` by hand, and never rename `publish.yml`, which the trusted publisher on npmjs.com names. A merge without a version change publishes nothing. The one exception was 0.1.0, published once by hand to create the package, because npm attaches a trusted publisher only to a package that already exists; don't take it as precedent.

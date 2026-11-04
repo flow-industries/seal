@@ -45,7 +45,7 @@ vault.stop();
 
 `saveNote` resolves with the revision the saved content now has; pass it to the next save as `revision` and `digest`. A save on a revision the device can't place throws `NoteChangedError`: read the note again and reapply the edit. Moving an older view the person didn't edit only renames the note and keeps the newer text.
 
-By default, a base the device can still place on an older revision counts as an edit of that revision, and the save replaces whatever landed since, including another device's edit that a sync brought in after you read. To push changes planned from an earlier read, use compare-and-swap. Pass `{ current: true }` to `saveNote` or `saveAttachment`, or pass the base as the last argument of `rename(id, path, base)` or `remove(id, base)`. Each then throws `NoteChangedError` unless the base names the stored revision itself, so you can read again and retry.
+By default, a base the device can still place on an older revision counts as an edit of that revision. So an edited save made on a view that is no longer current replaces whatever landed since, including another device's edit that a sync brought in after you read; the newer text survives only in local history. To push changes planned from an earlier read, use compare-and-swap. Pass `{ current: true }` to `saveNote` or `saveAttachment`, or pass the base as the last argument of `rename(id, path, base)` or `remove(id, base)`. Each then throws `NoteChangedError` unless the base names the stored revision itself, so you can read again and retry.
 
 Attachments follow the same rules. `listAttachments()` lists them without their bytes (`id`, `path`, `mime`, `size`, `revision`, `digest`), `readAttachment(id)` returns one's bytes, and `saveAttachment({ id, path, bytes, revision, digest })` resolves with the new revision. `rename` and `remove` take a note or an attachment. Moving a note rewrites the links to it; moving an attachment leaves them as written, so save the notes that link to it.
 
@@ -59,13 +59,14 @@ Each seed keeps its own local database, named after its recipient id, so two lin
 
 ### Runtime requirements
 
-- **IndexedDB.** The local database is IndexedDB through Dexie. Under Node, load `fake-indexeddb/auto` before this package.
+- **IndexedDB.** The local database is IndexedDB through Dexie, which reads the global `indexedDB` once, when it is imported. Under Node, load `fake-indexeddb/auto` before this package: make it the first import of the entry you bundle. Or hand the device an IndexedDB of its own with `indexedDB: { factory, keyRange }` in its options.
+- **`fake-indexeddb` is memory only.** Edits not yet synced die with the process, so `await vault.sync()` before `stop()` and before exiting. Electron and browsers keep a real IndexedDB on disk.
 - **A bundler for the device entry.** Flow ID's SDK publishes ESM that plain Node can't load, so bundle the device client with Bun or esbuild. With esbuild, mark `mppx` and `mppx/*` external: the SDK's `viem` peer imports it dynamically, and none of it reaches the bundle. Every other module loads under plain Node.
 - **Bundle size.** The device entry bundles to about 1.6 MB for Node, with no editor, renderer or UI code (`bun run size`).
 
 ## Modules
 
-The root export, the device client, and `testing` are the package's stable API. The vault core NOTE itself builds on is importable under `internal/`, mirroring the source tree, with no stability promise between versions:
+Only two entry points are supported, and only they follow semver: the root, `@flow-industries/seal`, which is the device client, and `@flow-industries/seal/testing`. Everything under `@flow-industries/seal/internal/*` is there for NOTE alone. It mirrors the source tree and may change in any release, a patch included, so don't build on it:
 
 | Subpath | Holds |
 | --- | --- |
@@ -116,3 +117,5 @@ bun run size        # bundles the device entry and checks what it reaches
 ## Releasing
 
 Change `version` in `package.json` and merge it. The push to `main` runs `.github/workflows/publish.yml`, which publishes that exact version through npm trusted publishing. There is no npm token. Never publish by hand.
+
+The one exception is 0.1.0. It was published once by hand, to create the package on npm, because npm attaches a trusted publisher only to a package that already exists. Every later version publishes from `publish.yml`.

@@ -152,8 +152,10 @@ export interface DeviceVault {
    * `id` creates the note and a new `path` moves it; a save that changes
    * nothing writes nothing. A move of an older view the person didn't edit
    * keeps the newer text and only renames, so it resolves with that older
-   * revision: read the note again to see the text it kept. An existing note
-   * saved without a revision this device can place throws `NoteChangedError`.
+   * revision: read the note again to see the text it kept. An edited save of
+   * an older view replaces the newer text, unless `options.current` refuses
+   * it. An existing note saved without a revision this device can place
+   * throws `NoteChangedError`.
    */
   saveNote(note: DeviceNote, options?: WriteOptions): Promise<RevisionBase>;
   /** Every attachment outside the trash, without its bytes. */

@@ -58,7 +58,7 @@ interface Forged {
   signer: string;
   privateKey: Uint8Array;
 }
-/** Builds a statement exactly as the ticket specifies, independently of createAccess and its checks. */
+/** Builds a statement exactly as the format specifies, independently of createAccess and its checks. */
 async function forge(statement: Forged, at = context) {
   await sodium.ready;
   const nonce = sodium.randombytes_buf(32);
