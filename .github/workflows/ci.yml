@@ -6,9 +6,14 @@ on:
   push:
     branches: [main]
 
+# Only a pull request's runs cancel each other. A push to main, and the release
+# run that calls this workflow, always finish, so no version bump goes unpublished.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
 
 jobs:
   check:

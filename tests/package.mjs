@@ -1,6 +1,7 @@
 // Loads the built package the way Node resolves it for a consumer: through
 // its own `exports`, from `dist`, with no bundler. Run by `bun run test:package`.
 import { strict as assert } from "node:assert";
+import { execFileSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -49,3 +50,25 @@ assert.equal(
   "sealed",
 );
 console.log(`loaded ${subpaths.length - needsBundler.size} modules from dist`);
+
+const [packed] = JSON.parse(
+  execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    encoding: "utf8",
+  }),
+);
+const shipped = packed.files.map((file) => file.path);
+for (const required of ["LICENSE", "README.md", "package.json"])
+  assert.ok(shipped.includes(required), `${required} not in the tarball`);
+assert.ok(
+  shipped.every(
+    (path) =>
+      path === "LICENSE" ||
+      path === "README.md" ||
+      path === "package.json" ||
+      path.startsWith("dist/"),
+  ),
+  "the tarball ships more than dist, the licence and the readme",
+);
+console.log(
+  `the tarball ships ${shipped.length} files, the licence among them`,
+);

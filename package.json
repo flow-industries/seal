@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "End-to-end encrypted vault core: the container, signed access, journal sync and the device client",
   "type": "module",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/flow-industries/seal.git"
@@ -12,7 +13,8 @@
     "access": "public"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "sideEffects": false,
   "exports": {

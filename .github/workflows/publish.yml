@@ -1,7 +1,8 @@
 name: publish
 
 # Publishes on a version bump, with no token: npm authenticates the run itself through
-# GitHub's OIDC provider (trusted publishing), which is what `id-token: write` below mints.
+# GitHub's OIDC provider (trusted publishing), which is what `id-token: write` mints.
+# Only the publish job may mint it: the quality gate installs and runs dependency code.
 # The trusted publisher registered on npmjs.com names this file, so renaming it breaks
 # publishing until the npm side is updated to match.
 on:
@@ -12,22 +13,26 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   quality:
     uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
 
   publish:
     needs: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.2"
       # `prepublishOnly` builds `dist` with the repo's own TypeScript.
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
       - uses: actions/setup-node@v4
         with:
           node-version: 22
