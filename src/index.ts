@@ -25,6 +25,7 @@ export {
   SYNC_TOO_LARGE,
   SYNCED,
   type SyncListener,
+  type SyncReport,
   type SyncStatus,
   UnlockError,
 } from "./app/runtime.ts";

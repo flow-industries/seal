@@ -40,13 +40,14 @@ async function linkedDevice(
   admin: AdminBrowser,
   label: string,
   indexedDB?: { factory: IDBFactory; keyRange: typeof IDBKeyRange },
+  fetch = admin.flowId.fetch,
 ) {
   const seed = createDeviceSeed();
   const options = {
     host: TEST_HOST,
     credentials: memoryStore<NoteDeviceCredentials>(),
     checkpoints: memoryStore<DeviceCheckpoint>(),
-    fetch: admin.flowId.fetch,
+    fetch,
     ...(indexedDB && { indexedDB }),
   };
   const shown = Promise.withResolvers<LinkPrompt>();
@@ -323,4 +324,77 @@ test("a device given its own IndexedDB keeps its databases there, and deletes th
   vault.stop();
   await deleteDeviceStorage(device.seed, { indexedDB });
   expect(await vaultDatabaseNames({ indexedDB })).toEqual([]);
+}, 30_000);
+
+/** Flow ID as `admin` serves it, except that vault record requests wait while `held` and fail while `offline`. */
+function unreliable(admin: AdminBrowser) {
+  const state = { held: false, offline: false, release: () => {} };
+  let gate = Promise.resolve();
+  const fetch: AdminBrowser["flowId"]["fetch"] = async (url, init) => {
+    if (new URL(url).pathname === "/api/atproto/note/records") {
+      if (state.offline) throw new TypeError("fetch failed");
+      if (state.held) await gate;
+    }
+    return admin.flowId.fetch(url, init);
+  };
+  return {
+    state,
+    fetch,
+    hold() {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      gate = promise;
+      state.held = true;
+      state.release = () => {
+        state.held = false;
+        resolve();
+      };
+    },
+  };
+}
+
+test("stop() lets a running save land and waits out a sync in flight, so deleting the device's storage races nothing", async () => {
+  Dexie.dependencies.indexedDB = new IDBFactory();
+  const admin = await adminBrowser(fakeFlowId());
+  const network = unreliable(admin);
+  const device = await linkedDevice(admin, "Laptop", undefined, network.fetch);
+  const vault = await device.open();
+  await vault.sync();
+  network.hold();
+  const syncing = vault.sync();
+  const saving = vault.saveNote({
+    id: crypto.randomUUID(),
+    path: "Kept.md",
+    source: "kept",
+  });
+  let stopped = false;
+  const stopping = vault.stop().then(() => {
+    stopped = true;
+  });
+  await expect(
+    vault.saveNote({ id: crypto.randomUUID(), path: "Late.md", source: "" }),
+  ).rejects.toThrow("Vault locked");
+  expect(await saving).toMatchObject({ revision: expect.any(String) });
+  await Bun.sleep(50);
+  expect(stopped).toBe(false);
+  network.state.release();
+  await stopping;
+  expect(await syncing).toEqual({ read: false });
+  await deleteDeviceStorage(device.seed);
+  expect(await vaultDatabases()).toEqual([]);
+}, 30_000);
+
+test("sync() says whether it read the vault from the PDS", async () => {
+  Dexie.dependencies.indexedDB = new IDBFactory();
+  const admin = await adminBrowser(fakeFlowId());
+  const network = unreliable(admin);
+  const vault = await (
+    await linkedDevice(admin, "Laptop", undefined, network.fetch)
+  ).open();
+  expect(await vault.sync()).toEqual({ read: true });
+  network.state.offline = true;
+  expect(await vault.sync()).toEqual({ read: false });
+  network.state.offline = false;
+  expect(await vault.sync()).toEqual({ read: true });
+  await vault.stop();
+  expect(await vault.sync()).toEqual({ read: false });
 }, 30_000);

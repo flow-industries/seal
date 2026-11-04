@@ -98,7 +98,9 @@ export async function openAdminVault(
   return {
     read: () => runtime.read(),
     save: (note) => runtime.save(note),
-    sync: () => runtime.sync(),
+    async sync() {
+      await runtime.sync();
+    },
     lock: () => runtime.lock(),
   };
 }

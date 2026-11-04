@@ -10,7 +10,12 @@ import {
 } from "@flow-industries/id";
 import sodium from "libsodium-wrappers-sumo";
 import { z } from "zod";
-import type { NoteView, StrandedEdits, SyncListener } from "../app/runtime.ts";
+import type {
+  NoteView,
+  StrandedEdits,
+  SyncListener,
+  SyncReport,
+} from "../app/runtime.ts";
 import { synchronizedRuntime } from "../app/synchronized-runtime.ts";
 import {
   type Checkpoint,
@@ -187,8 +192,12 @@ export interface DeviceVault {
   /** Moves a note or an attachment to the trash; with `base`, only while it names the stored revision. */
   remove(id: string, base?: RevisionBase): Promise<void>;
   compose(request: ComposeRequest): Promise<{ selectedId: string }>;
-  /** Writes sync on their own; this syncs now. */
-  sync(): Promise<void>;
+  /**
+   * Writes sync on their own; this syncs now, joining a sync already
+   * running. `read` says whether it read the vault from the PDS: until one
+   * has, what `read()` returns may be only this device's local copy.
+   */
+  sync(): Promise<SyncReport>;
   /** `SYNC_LOCKED` means the device lost access and the keys are gone: open it again to learn why. */
   subscribe(listener: SyncListener): () => void;
   subscribeChanges(listener: () => void): () => void;
@@ -196,13 +205,19 @@ export interface DeviceVault {
   subscribeTrustLoss(listener: (loss: TrustLoss) => void): () => void;
   /** Edits a rotation left in the earlier epoch's local database. */
   stranded?: StrandedEdits;
-  /** Wipes the vault and signing keys; writes not yet synced wait in the local database for the next open. */
-  stop(): void;
+  /**
+   * Refuses new operations, lets those already running finish, then wipes
+   * the vault and signing keys and stops syncing. Resolves once nothing
+   * touches the local database or the PDS any more, so `deleteDeviceStorage`
+   * may follow. Writes not yet synced wait in the local database for the
+   * next open.
+   */
+  stop(): Promise<void>;
 }
 /**
  * Deletes every local database this seed's vault sessions wrote, in every
- * epoch, with any edits not yet synced. Call it after `stop()` when the
- * device is unlinked; it never touches the PDS or another seed's databases,
+ * epoch, with any edits not yet synced. Call it after `await vault.stop()`
+ * when the device is unlinked; it never touches the PDS or another seed's databases,
  * which `openDeviceVault` names by each seed's recipient id.
  */
 export async function deleteDeviceStorage(
@@ -638,48 +653,67 @@ function sessionVault(
   transport: AuthVaultTransport,
 ): DeviceVault {
   let stopped = false;
+  let stopping: Promise<void> | undefined;
+  const inFlight = new Set<Promise<unknown>>();
+  /** Runs one operation on the session, refused once `stop()` began, and tracked so `stop()` can wait for it. */
+  function tracked<T>(operation: () => Promise<T>): Promise<T> {
+    if (stopped) return Promise.reject(new Error("Vault locked"));
+    const work = operation();
+    inFlight.add(work);
+    const settle = () => inFlight.delete(work);
+    work.then(settle, settle);
+    return work;
+  }
+  /** Operations already running finish first, so a save made before `stop()` lands in the outbox rather than failing half-way. */
+  async function shutDown() {
+    stopped = true;
+    if (inFlight.size) await Promise.allSettled(inFlight);
+    transport.stop();
+    runtime.lock();
+    await runtime.settled();
+  }
   return {
-    read: () => runtime.read(),
-    async saveNote(note, options = {}) {
-      if (stopped) throw new Error("Vault locked");
-      if (isInternalWritingPath(note.path))
-        throw new Error("This path is reserved for vault preferences.");
-      const base = baseOf(note, options);
-      if (!(await session.places(note.id, base))) throw new NoteChangedError();
-      return swapped(!!base?.current, () =>
-        session.saveNote(note.id, note.path, note.source, undefined, base),
-      );
-    },
-    listAttachments: () => session.listAssets(),
-    readAttachment: (id) => session.openAsset(id),
-    async saveAttachment(attachment, options = {}) {
-      if (stopped) throw new Error("Vault locked");
-      const { id, path, bytes, mime } = attachment;
-      const base = baseOf(attachment, options);
-      if (!(await session.places(id, base))) throw new NoteChangedError();
-      return swapped(!!base?.current, () =>
-        session.saveAsset(id, path, bytes, base, mime),
-      );
-    },
-    async rename(id, path, base) {
-      if (stopped) throw new Error("Vault locked");
-      if (isInternalWritingPath(path))
-        throw new Error("This path is reserved for vault preferences.");
-      return swapped(!!base, () => session.rename(id, path, base));
-    },
-    async remove(id, base) {
-      if (stopped) throw new Error("Vault locked");
-      await swapped(!!base, () => session.remove(id, undefined, base));
-    },
-    compose: (request) => runtime.compose(request),
+    read: () => tracked(() => runtime.read()),
+    saveNote: (note, options = {}) =>
+      tracked(async () => {
+        if (isInternalWritingPath(note.path))
+          throw new Error("This path is reserved for vault preferences.");
+        const base = baseOf(note, options);
+        if (!(await session.places(note.id, base)))
+          throw new NoteChangedError();
+        return swapped(!!base?.current, () =>
+          session.saveNote(note.id, note.path, note.source, undefined, base),
+        );
+      }),
+    listAttachments: () => tracked(() => session.listAssets()),
+    readAttachment: (id) => tracked(() => session.openAsset(id)),
+    saveAttachment: (attachment, options = {}) =>
+      tracked(async () => {
+        const { id, path, bytes, mime } = attachment;
+        const base = baseOf(attachment, options);
+        if (!(await session.places(id, base))) throw new NoteChangedError();
+        return swapped(!!base?.current, () =>
+          session.saveAsset(id, path, bytes, base, mime),
+        );
+      }),
+    rename: (id, path, base) =>
+      tracked(async () => {
+        if (isInternalWritingPath(path))
+          throw new Error("This path is reserved for vault preferences.");
+        return swapped(!!base, () => session.rename(id, path, base));
+      }),
+    remove: (id, base) =>
+      tracked(async () => {
+        await swapped(!!base, () => session.remove(id, undefined, base));
+      }),
+    compose: (request) => tracked(() => runtime.compose(request)),
     sync: () => runtime.sync(),
     subscribe: (listener) => runtime.subscribe(listener),
     subscribeChanges: (listener) => runtime.subscribeChanges(listener),
     subscribeTrustLoss: (listener) => runtime.subscribeTrustLoss(listener),
     stop() {
-      stopped = true;
-      transport.stop();
-      runtime.lock();
+      stopping ??= shutDown();
+      return stopping;
     },
   };
 }

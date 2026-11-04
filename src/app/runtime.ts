@@ -90,13 +90,23 @@ export interface NoteRuntime {
   /** Writes that left another admin's code unsigned, or its links stale (see `TrustLoss`). */
   subscribeTrustLoss?(listener: (loss: TrustLoss) => void): () => void;
   subscribe?(listener: SyncListener): () => void;
-  sync?(): Promise<void>;
+  sync?(): Promise<SyncReport>;
   recovery?(): Promise<Blob>;
   /** Who can open a signed vault, as this runtime last verified it; absent or null while access is unsigned. */
   access?(): VaultAccessView | null;
   /** Entries the last sync couldn't read; they stay out of this device until a re-key drops them. */
   unreadable?(): number;
   lock(): void;
+}
+/** What one sync achieved. */
+export interface SyncReport {
+  /**
+   * The sync read the vault from the PDS and applied it, so what this
+   * device reads now reflects the vault. False when the PDS couldn't be
+   * reached or refused the read, or the vault stopped: plan nothing against
+   * a vault no sync has read.
+   */
+  read: boolean;
 }
 export interface VaultAccessView {
   did: string;

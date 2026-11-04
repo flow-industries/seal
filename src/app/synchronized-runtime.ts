@@ -19,6 +19,7 @@ import {
   type SyncBackoffStatus,
   type SyncListener,
   type SyncRefusal,
+  type SyncReport,
   type SyncStatus,
   syncBackoffStatus,
   waitAtMost,
@@ -53,12 +54,15 @@ export function synchronizedRuntime(
   connect: () => Promise<VaultSnapshotTransport>,
   flushLimit = LOCK_FLUSH_TIMEOUT_MS,
 ): NoteRuntime &
-  Required<Pick<NoteRuntime, "subscribe" | "subscribeTrustLoss" | "sync">> {
+  Required<Pick<NoteRuntime, "subscribe" | "subscribeTrustLoss" | "sync">> & {
+    /** Resolves once no sync is running; after `lock()`, none starts again. */
+    settled(): Promise<void>;
+  } {
   const local = localRuntime(session);
   let engine: VaultSyncEngine | null = null;
   const listeners = new Set<SyncListener>();
   let stopped = false;
-  let running: Promise<void> | null = null;
+  let running: Promise<SyncReport> | null = null;
   let lastStatus: SyncStatus | undefined;
   let backoff: {
     step: number;
@@ -71,17 +75,18 @@ export function synchronizedRuntime(
     lastStatus = status;
     for (const listener of listeners) listener(status);
   };
-  async function coordinate() {
+  async function coordinate(): Promise<SyncReport> {
     if (!engine) {
       const transport = await connect();
       if (stopped) {
         transport.stop?.();
-        return;
+        return { read: false };
       }
       engine = new VaultSyncEngine(session, transport);
     }
     const result = await engine.sync();
-    if (stopped) return;
+    const report = { read: result.read };
+    if (stopped) return report;
     const refusal = refusals.get(result.blocked);
     if (refusal) {
       const step = backoff
@@ -95,19 +100,21 @@ export function synchronizedRuntime(
         status: syncBackoffStatus(refusal, until),
       };
       publish(backoff.status);
-      return;
+      return report;
     }
     if (!result.blocked) backoff = null;
     const pending = await session.database.outbox.count();
     publish(syncStatus(result.blocked, pending));
+    return report;
   }
-  function synchronize(): Promise<void> {
-    if (stopped) return Promise.resolve();
+  function synchronize(): Promise<SyncReport> {
+    if (stopped) return Promise.resolve({ read: false });
     if (running) return running;
     running = coordinate()
       .catch(async (error) => {
         if (error instanceof VaultAccessError) await lockOut();
         else publish(SYNC_PENDING);
+        return { read: false };
       })
       .finally(() => {
         running = null;
@@ -194,5 +201,8 @@ export function synchronizedRuntime(
     },
     unreadable: () => engine?.unreadable() ?? 0,
     lock: stop,
+    async settled() {
+      await running;
+    },
   };
 }
