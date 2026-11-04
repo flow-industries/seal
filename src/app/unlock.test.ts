@@ -9,11 +9,16 @@ import {
   signedVault,
 } from "../../tests/unlock-fixture.ts";
 import {
+  accessHeaderCommitment,
   createAccessRecipient,
   unwrapAccessKey,
   v2PrfInput,
 } from "../crypto/access-v2.ts";
-import { createSeedRecipient, passkeyAdmin } from "../crypto/access-v3.ts";
+import {
+  createSeedRecipient,
+  passkeyAdmin,
+  UNTRUSTED_ACCESS,
+} from "../crypto/access-v3.ts";
 import { createRecoveryFile } from "../crypto/index.ts";
 import {
   readVerifiedVaultRoot,
@@ -156,6 +161,37 @@ describe("strict v2 unlock", () => {
         checkpointOf(f.state),
       ),
     ).rejects.toThrow();
+  });
+  test("refuses unsigned metadata over the v3 slot it opened, which only a downgrade produces", async () => {
+    const f = await fixture();
+    const { header } = f.state.access;
+    const downgraded = await encryptedHeader(
+      f.key,
+      {
+        vault: f.state.vault,
+        epoch: f.state.epoch,
+        access: {
+          header,
+          metadata: {
+            recipients: [
+              {
+                credentialHash: f.admin.recipient.id,
+                publicKey: f.admin.recipient.boxPublicKey,
+              },
+            ],
+            accessCommitment: await accessHeaderCommitment(header),
+          },
+        },
+      },
+      did,
+    );
+    const verify = (slotVersion?: 2 | 3) =>
+      verifyHeader(f.key, did, downgraded, f.state.ownRecipient, null, {
+        slotVersion,
+      });
+    await expect(verify(3)).rejects.toThrow(UNTRUSTED_ACCESS);
+    // The same root read through a v2 slot is a legacy vault, judged by the unlock that migrates it.
+    expect((await verify(2)).pinned).toBeNull();
   });
   test("recovery of an unsigned vault evaluates PRF once and adds the passkey only after authenticating it, dropping nobody", async () => {
     const f = await fixture();
