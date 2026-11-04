@@ -71,10 +71,14 @@ export function synchronizedRuntime(
     refusal: SyncRefusal;
     status: SyncBackoffStatus;
   } | null = null;
+  /** Tells every listener; one that throws or rejects is the caller's bug, and can't fail the sync or silence the others. */
   const publish = (status: SyncStatus) => {
     if (stopped) return;
     lastStatus = status;
-    for (const listener of listeners) listener(status);
+    for (const listener of listeners)
+      try {
+        void Promise.resolve(listener(status)).catch(() => {});
+      } catch {}
   };
   async function coordinate(): Promise<SyncReport> {
     if (!engine) {
@@ -204,10 +208,11 @@ export function synchronizedRuntime(
     sync() {
       backoff = null;
       if (!running) return synchronize();
-      followUp ??= running.then(() => {
+      const next = () => {
         followUp = null;
         return synchronize();
-      });
+      };
+      followUp ??= running.then(next, next);
       return followUp;
     },
     unreadable: () => engine?.unreadable() ?? 0,

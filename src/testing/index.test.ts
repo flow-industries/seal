@@ -588,3 +588,61 @@ test("a repairLinks predicate is asked about each linking note at its path after
   const note = (await vault.read()).notes.find((value) => value.id === moved);
   expect(note?.source).toBe("[s](../A/Sibling.md)");
 }, 30_000);
+
+test("a status listener that throws neither fails a sync nor stops later sync() calls from waiting for a run of their own", async () => {
+  Dexie.dependencies.indexedDB = new IDBFactory();
+  const admin = await adminBrowser(fakeFlowId());
+  const network = unreliable(admin);
+  const vault = await (
+    await linkedDevice(admin, "Laptop", undefined, network.fetch)
+  ).open();
+  await vault.sync();
+  let throwing = false;
+  const heard: string[] = [];
+  const unsubscribe = vault.subscribe(() => {
+    if (throwing) throw new Error("listener bug");
+  });
+  vault.subscribe((status) => {
+    heard.push(status);
+  });
+  throwing = true;
+  const save = (path: string) =>
+    vault.saveNote({ id: crypto.randomUUID(), path, source: path });
+
+  await save("B.md");
+  network.hold(true);
+  const running = vault.sync();
+  await network.state.reached;
+  const joined = vault.sync();
+  network.state.release();
+  expect(await running).toEqual({ read: true });
+  expect(await joined).toEqual({ read: true });
+  expect(heard.length).toBeGreaterThan(0);
+  throwing = false;
+  unsubscribe();
+
+  await save("C.md");
+  network.hold(true);
+  const next = vault.sync();
+  await network.state.reached;
+  await save("D.md");
+  let settled = false;
+  const later = vault.sync().finally(() => {
+    settled = true;
+  });
+  await Bun.sleep(50);
+  expect(settled).toBe(false);
+  network.state.release();
+  await next;
+  expect(await later).toEqual({ read: true });
+  await vault.stop();
+  const notepad = await openAdminVault(admin);
+  try {
+    await notepad.sync();
+    expect(
+      (await notepad.read()).notes.map((note) => note.path).toSorted(),
+    ).toEqual(["B.md", "C.md", "D.md"]);
+  } finally {
+    notepad.lock();
+  }
+}, 30_000);
