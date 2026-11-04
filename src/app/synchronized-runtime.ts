@@ -63,6 +63,7 @@ export function synchronizedRuntime(
   const listeners = new Set<SyncListener>();
   let stopped = false;
   let running: Promise<SyncReport> | null = null;
+  let followUp: Promise<SyncReport> | null = null;
   let lastStatus: SyncStatus | undefined;
   let backoff: {
     step: number;
@@ -195,9 +196,19 @@ export function synchronizedRuntime(
         listeners.delete(listener);
       };
     },
+    /**
+     * Syncs now. A sync already running may have captured the outbox before
+     * the caller's latest saves, so this waits for one more run after it,
+     * shared by every call made meanwhile, and reports that run.
+     */
     sync() {
       backoff = null;
-      return synchronize();
+      if (!running) return synchronize();
+      followUp ??= running.then(() => {
+        followUp = null;
+        return synchronize();
+      });
+      return followUp;
     },
     unreadable: () => engine?.unreadable() ?? 0,
     lock: stop,

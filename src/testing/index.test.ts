@@ -326,28 +326,49 @@ test("a device given its own IndexedDB keeps its databases there, and deletes th
   expect(await vaultDatabaseNames({ indexedDB })).toEqual([]);
 }, 30_000);
 
-/** Flow ID as `admin` serves it, except that vault record requests wait while `held` and fail while `offline`. */
+/**
+ * Flow ID as `admin` serves it, except that vault record requests fail while
+ * `offline`, and wait while held: every one, or with `puts` only the writes.
+ */
 function unreliable(admin: AdminBrowser) {
-  const state = { held: false, offline: false, release: () => {} };
+  const state = {
+    held: false,
+    putsOnly: false,
+    offline: false,
+    release: () => {},
+    /** Resolves when a held request first reaches the gate. */
+    reached: Promise.resolve(),
+  };
   let gate = Promise.resolve();
+  let arrived = () => {};
   const fetch: AdminBrowser["flowId"]["fetch"] = async (url, init) => {
     if (new URL(url).pathname === "/api/atproto/note/records") {
       if (state.offline) throw new TypeError("fetch failed");
-      if (state.held) await gate;
+      const put = JSON.parse(String(init.body)).method === "put";
+      if (state.held && (put || !state.putsOnly)) {
+        arrived();
+        await gate;
+      }
     }
     return admin.flowId.fetch(url, init);
   };
   return {
     state,
     fetch,
-    hold() {
+    hold(puts = false) {
       const { promise, resolve } = Promise.withResolvers<void>();
+      const reached = Promise.withResolvers<void>();
       gate = promise;
-      state.held = true;
-      state.release = () => {
-        state.held = false;
-        resolve();
-      };
+      arrived = reached.resolve;
+      Object.assign(state, {
+        held: true,
+        putsOnly: puts,
+        reached: reached.promise,
+        release: () => {
+          state.held = false;
+          resolve();
+        },
+      });
     },
   };
 }
@@ -502,4 +523,68 @@ test("moves repair links by default, and re-target links an editor already rewro
   expect(await swap.source(swap.ids.index)).not.toBe(
     "first [[Beta]] then [[Alpha]]",
   );
+}, 30_000);
+
+test("a sync() that finds one running waits for a run of its own, so a save made meanwhile reaches the PDS before stop()", async () => {
+  Dexie.dependencies.indexedDB = new IDBFactory();
+  const admin = await adminBrowser(fakeFlowId());
+  const network = unreliable(admin);
+  const vault = await (
+    await linkedDevice(admin, "Laptop", undefined, network.fetch)
+  ).open();
+  await vault.sync();
+  await vault.saveNote({
+    id: crypto.randomUUID(),
+    path: "First.md",
+    source: "1",
+  });
+  network.hold(true);
+  const first = vault.sync();
+  await network.state.reached;
+  await vault.saveNote({
+    id: crypto.randomUUID(),
+    path: "Second.md",
+    source: "2",
+  });
+  const second = vault.sync();
+  network.state.release();
+  expect(await first).toEqual({ read: true });
+  expect(await second).toEqual({ read: true });
+  await vault.stop();
+  const notepad = await openAdminVault(admin);
+  try {
+    await notepad.sync();
+    expect(
+      (await notepad.read()).notes.map((note) => note.path).toSorted(),
+    ).toEqual(["First.md", "Second.md"]);
+  } finally {
+    notepad.lock();
+  }
+}, 30_000);
+
+test("a repairLinks predicate is asked about each linking note at its path after the move, the moved note's own links included", async () => {
+  Dexie.dependencies.indexedDB = new IDBFactory();
+  const admin = await adminBrowser(fakeFlowId());
+  const vault = await (await linkedDevice(admin, "Laptop")).open();
+  const moved = crypto.randomUUID();
+  await vault.saveNote({
+    id: crypto.randomUUID(),
+    path: "A/Sibling.md",
+    source: "sibling",
+  });
+  await vault.saveNote({
+    id: moved,
+    path: "A/x.md",
+    source: "[s](Sibling.md)",
+  });
+  const asked: string[] = [];
+  await vault.rename(moved, "B/x.mdx", undefined, {
+    repairLinks: (path) => {
+      asked.push(path);
+      return unindexedOnly(path);
+    },
+  });
+  expect(asked).toEqual(["B/x.mdx"]);
+  const note = (await vault.read()).notes.find((value) => value.id === moved);
+  expect(note?.source).toBe("[s](../A/Sibling.md)");
 }, 30_000);
