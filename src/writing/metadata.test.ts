@@ -1,0 +1,321 @@
+import { expect, spyOn, test } from "bun:test";
+import { markdownLanguage } from "@codemirror/lang-markdown";
+import * as yaml from "yaml";
+import { maskMarkdownComments } from "./comments.ts";
+import {
+  noteCssClasses,
+  readNoteFrontmatter,
+  readNoteMetadata,
+  removeNoteProperty,
+  updateNoteProperty,
+} from "./metadata.ts";
+import { moveResultSelection, rankQuickSwitcher } from "./navigation";
+import { noteOutline } from "./outline";
+import {
+  countNoteWords,
+  dailyNote,
+  expandTemplate,
+  extractNoteSelection,
+  mergeNoteSources,
+} from "./utilities";
+
+test("metadata handles YAML types and tags without treating code and links as tags", () => {
+  const source =
+    '---\naliases: ["A, B", Café]\ntags: [work, "#project/one"]\nfinished: false\ncount: 3\ndate: 2026-10-15\nnested:\n  keep: yes\n---\n# Heading\n#inline #日本語 #123\n`#code`\n```md\n#fenced\n```\n[link](https://example.com/#anchor)\n<!-- #comment -->\n\\#escaped';
+  const result = readNoteMetadata(source);
+  expect(result.error).toBeNull();
+  expect(result.aliases).toEqual(["A, B", "Café"]);
+  expect(result.tags).toEqual(["work", "project/one", "inline", "日本語"]);
+  expect(result.properties.map((property) => property.type)).toEqual([
+    "list",
+    "tags",
+    "checkbox",
+    "number",
+    "date",
+    "unknown",
+  ]);
+});
+
+test("editing one YAML value preserves comments, nested unknown properties, quote styles and CRLF body bytes", () => {
+  const source =
+    '---\r\n# context\r\ntitle: "Old" # retain\r\nnested:\r\n  x: [one, two] # custom\r\ntags:\r\n  - one\r\n  - two\r\n---\r\n# Body\r\nuntouched  \r\n';
+  const edited = updateNoteProperty(source, "title", "New");
+  expect(edited).toBe(source.replace('"Old"', '"New"'));
+  const tags = updateNoteProperty(edited, "tags", ["three", "four"]);
+  expect(readNoteMetadata(tags).tags).toEqual(["three", "four"]);
+  expect(tags).toContain("nested:\r\n  x: [one, two] # custom\r\n");
+  expect(tags.endsWith("---\r\n# Body\r\nuntouched  \r\n")).toBe(true);
+  expect(removeNoteProperty(edited, "title")).toBe(
+    source.replace('title: "Old" # retain\r\n', ""),
+  );
+});
+
+test("empty, absent, malformed, duplicate and flow-style YAML fail safely or preserve source", () => {
+  expect(
+    readNoteMetadata(updateNoteProperty("body", "tags", ["work"])).tags,
+  ).toEqual(["work"]);
+  expect(
+    readNoteMetadata(updateNoteProperty("---\nx:\ny: 2\n---\nbody", "x", "yes"))
+      .properties[0]?.value,
+  ).toBe("yes");
+  for (const source of [
+    "---\nunclosed",
+    "---\nx: [broken\n---\nbody",
+    "---\nx: 1\nx: 2\n---",
+    "---\n- array\n---",
+  ]) {
+    expect(readNoteMetadata(source).error).not.toBeNull();
+    expect(() => updateNoteProperty(source, "x", 3)).toThrow();
+  }
+  expect(() => updateNoteProperty("---\n{x: 1}\n---\n", "x", 2)).toThrow();
+  expect(removeNoteProperty("body", "absent")).toBe("body");
+});
+
+test("outline uses Markdown syntax for ATX and Setext and ignores frontmatter, code, and comments", () => {
+  const source =
+    "---\ntitle: not a heading\n---\n# First #\n\nSecond\n------\n\n```md\n# no\n```\n\n    # indented\n\n<!--\n# hidden\n-->\n\n### Final\n";
+  const headings = noteOutline(source);
+  expect(headings.map(({ text, level }) => [text, level])).toEqual([
+    ["First", 1],
+    ["Second", 2],
+    ["Final", 3],
+  ]);
+  expect(headings[0]?.line).toBe(4);
+  expect(source.slice(headings[1]?.start, headings[1]?.end)).toBe(
+    "Second\n------",
+  );
+});
+
+test("templates use local calendar dates and leave unknown placeholders untouched", () => {
+  const date = new Date(2026, 9, 15, 9, 7);
+  expect(dailyNote(date)).toEqual({
+    name: "2026-10-15.md",
+    path: "2026-10-15.md",
+    source: "# 2026-10-15\n\n",
+  });
+  expect(
+    expandTemplate("{{title}} {{date}} {{time}} {{unknown}}", {
+      title: "Plan",
+      date,
+    }),
+  ).toBe("Plan 2026-10-15 09:07 {{unknown}}");
+});
+
+test("extraction validates source ranges and merging retains destination metadata", () => {
+  const source = "---\ntags: [one]\n---\nHello world 😀";
+  const from = source.indexOf("world");
+  expect(
+    extractNoteSelection(source, from, source.length, "notes/World"),
+  ).toEqual({
+    source: `${source.slice(0, from)}[[notes/World]]`,
+    extracted: "world 😀",
+  });
+  expect(() => extractNoteSelection(source, 1, 4, "x")).toThrow();
+  expect(() =>
+    extractNoteSelection(source, from, source.length - 1, "x"),
+  ).toThrow();
+  expect(
+    mergeNoteSources(source, "---\naliases: [incoming]\n---\nNew text\n"),
+  ).toBe(`${source}\n\nNew text\n`);
+});
+
+test("word counts exclude frontmatter and count graphemes rather than surrogate pairs", () => {
+  expect(
+    countNoteWords("---\naliases: [ignore me]\n---\ncafé 👨‍👩‍👧‍👦"),
+  ).toEqual({ words: 1, characters: 6 });
+});
+
+test("quick switcher ranks exact alias and basename matches, supports subsequences and keyboard bounds", () => {
+  const notes = [
+    { id: "body", path: "other.md", source: "orchard" },
+    { id: "name", path: "orchard.md", source: "" },
+    { id: "alias", path: "fruit.md", source: "---\naliases: [Orchard]\n---\n" },
+  ];
+  expect(rankQuickSwitcher(notes, "orchard").map((note) => note.id)).toEqual([
+    "alias",
+    "name",
+  ]);
+  expect(rankQuickSwitcher(notes, "orchrd")).toHaveLength(2);
+  expect(moveResultSelection(0, "ArrowUp", 3)).toBe(2);
+  expect(moveResultSelection(2, "ArrowDown", 3)).toBe(0);
+  expect(moveResultSelection(0, "End", 3)).toBe(2);
+  expect(moveResultSelection(0, "ArrowDown", 0)).toBe(-1);
+});
+
+test("inline comments and HTML attributes cannot introduce tags", () => {
+  expect(
+    readNoteMetadata(
+      'Hello <!-- #hidden --> <span title="#attribute">word</span> #visible',
+    ).tags,
+  ).toEqual(["visible"]);
+});
+
+test("multiline properties stay valid YAML and removing referenced anchors fails without returning corrupt source", () => {
+  const source = "---\ndescription: old # retained\nother: true\n---\nBody";
+  const updated = updateNoteProperty(source, "description", "First\nSecond");
+  expect(readNoteMetadata(updated).properties[0]?.value).toBe("First\nSecond");
+  expect(updated).toContain("# retained\nother: true\n---\nBody");
+  expect(() =>
+    removeNoteProperty("---\na: &x hello\nb: *x\n---\nBody", "a"),
+  ).toThrow();
+  expect(
+    readNoteMetadata("---\ndate: 2026-99-99\n---\n").properties[0]?.type,
+  ).toBe("text");
+  expect(() => mergeNoteSources("Destination", "---\nunterminated")).toThrow();
+});
+
+test("frontmatter-only reads preserve properties and YAML tags without parsing the Markdown body", () => {
+  const source =
+    '---\naliases: [Alias]\ntags: [work, work, "#project/one"]\ncssclasses: [wide, readable]\nfinished: true\n---\n#body #日本語 `#code`\n%% #hidden %%\n[link](target#anchor)';
+  const parse = spyOn(markdownLanguage.parser, "parse");
+  try {
+    const frontmatter = readNoteFrontmatter(source);
+    expect(noteCssClasses(source)).toEqual(["wide", "readable"]);
+    expect(parse).not.toHaveBeenCalled();
+    expect(frontmatter.aliases).toEqual(["Alias"]);
+    expect(frontmatter.tags).toEqual(["work", "project/one"]);
+    const full = readNoteMetadata(source);
+    expect(full.properties).toEqual(frontmatter.properties);
+    expect(full.frontmatter).toEqual(frontmatter.frontmatter);
+    expect(full.aliases).toEqual(frontmatter.aliases);
+    expect(full.error).toBe(frontmatter.error);
+    expect(full.tags).toEqual(["work", "project/one", "body", "日本語"]);
+  } finally {
+    parse.mockRestore();
+  }
+});
+
+test("frontmatter failures still allow full metadata reads to scan body tags", () => {
+  const source = "---\naliases: [unfinished\n---\n#visible";
+  const frontmatter = readNoteFrontmatter(source);
+  const full = readNoteMetadata(source);
+  expect(frontmatter.error).not.toBeNull();
+  expect(full.error).toBe(frontmatter.error);
+  expect(frontmatter.tags).toEqual([]);
+  expect(full.tags).toEqual(["visible"]);
+});
+
+test("comment-free sources retain exact bytes without a Markdown parse", () => {
+  const sources = [
+    "",
+    "\uFEFF---\r\ntitle: '100% ready'\r\n---\r\n# 日本語 😀\r\n",
+    "`single %` and \\% escapes\n```md\n% literal\n```\n",
+    "<!-- HTML --> #visible\n    # code\n",
+  ];
+  const parse = spyOn(markdownLanguage.parser, "parse");
+  try {
+    for (const source of sources)
+      expect(maskMarkdownComments(source)).toBe(source);
+    expect(parse).not.toHaveBeenCalled();
+    const source = "`%%code%%` \\%%escaped\n%%hidden%% #visible";
+    const masked = maskMarkdownComments(source);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(masked).toBe("`%%code%%` \\%%escaped\n           #visible");
+    expect(masked.length).toBe(source.length);
+  } finally {
+    parse.mockRestore();
+  }
+});
+
+test("repeated temporal property reads preserve calendar, local and offset validation", () => {
+  const cases = [
+    ["2024-02-29", "date"],
+    ["2026-02-29", "text"],
+    ["2026-13-01", "text"],
+    ["2026-10-24T09:07", "datetime"],
+    ["2026-10-24T09:07:30Z", "datetime"],
+    ["2026-10-24T09:07:30+05:30", "datetime"],
+    ["2026-10-24T09:07:30-03:00", "datetime"],
+    ["2026-10-24T25:07", "text"],
+    ["2026-02-29T09:07:30Z", "text"],
+    ["ordinary text", "text"],
+  ] as const;
+  for (let pass = 0; pass < 3; pass++) {
+    for (const [value, type] of cases) {
+      const result = readNoteFrontmatter(`---\nwhen: "${value}"\n---\n`);
+      expect(result.error).toBeNull();
+      expect(result.properties).toEqual([{ key: "when", value, type }]);
+    }
+  }
+});
+
+test("metadata without hashtag candidates skips the exclusion tree while actual tags keep their exclusions", () => {
+  const parse = spyOn(markdownLanguage.parser, "parse");
+  try {
+    expect(
+      readNoteMetadata("---\ntags: [front]\n---\n# Heading\nplain text").tags,
+    ).toEqual(["front"]);
+    expect(readNoteMetadata("\uFEFF# Heading\r\n100% ready\r\n").tags).toEqual(
+      [],
+    );
+    expect(parse).not.toHaveBeenCalled();
+    expect(
+      readNoteMetadata(
+        '#visible #visible #日本語 #parent/child `#code` [label](note#fragment) <!-- #hidden --> <span title="#attribute">text</span> \\#escaped #123',
+      ).tags,
+    ).toEqual(["visible", "日本語", "parent/child"]);
+    expect(parse).toHaveBeenCalledTimes(1);
+  } finally {
+    parse.mockRestore();
+  }
+});
+
+test("read-only frontmatter omits CST retention while editing preserves source layout", () => {
+  const source =
+    '---\r\n# retained\r\nlabel: &label "One" # inline\r\ncopy: *label\r\nfolded: >-\r\n  first\r\n  second\r\n---\r\nBody  \r\n';
+  const parse = spyOn(yaml, "parseDocument");
+  try {
+    const metadata = readNoteFrontmatter(source);
+    expect(metadata.error).toBeNull();
+    expect(metadata.frontmatter).toEqual({
+      start: 0,
+      contentStart: source.indexOf("# retained"),
+      contentEnd: source.lastIndexOf("---"),
+      end: source.indexOf("Body"),
+    });
+    expect(metadata.properties).toEqual([
+      { key: "label", value: "One", type: "text" },
+      { key: "copy", value: "One", type: "text" },
+      { key: "folded", value: "first second", type: "text" },
+    ]);
+    expect(parse.mock.calls[0]?.[1]).toEqual({ keepSourceTokens: false });
+    const edited = updateNoteProperty(source, "folded", "replacement");
+    expect(edited).toContain(
+      '# retained\r\nlabel: &label "One" # inline\r\ncopy: *label\r\n',
+    );
+    expect(edited.endsWith("---\r\nBody  \r\n")).toBe(true);
+    expect(
+      parse.mock.calls
+        .slice(1)
+        .every((call) => call[1]?.keepSourceTokens === true),
+    ).toBe(true);
+    expect(
+      readNoteFrontmatter(edited).properties.find(
+        (property) => property.key === "folded",
+      )?.value,
+    ).toBe("replacement");
+  } finally {
+    parse.mockRestore();
+  }
+});
+
+test("read-only frontmatter retains malformed YAML and alias expansion limits", () => {
+  const expansion =
+    "---\na: &a [one, two]\nb: &b [*a, *a]\nc: &c [*b, *b]\nd: &d [*c, *c]\ne: &e [*d, *d]\nf: &f [*e, *e]\ng: [*f, *f]\n---\n#visible";
+  const document = yaml.parseDocument(
+    expansion.slice(4, expansion.lastIndexOf("---")),
+    { keepSourceTokens: true },
+  );
+  expect(() => document.toJS({ maxAliasCount: 50 })).toThrow();
+  const limited = readNoteFrontmatter(expansion);
+  expect(limited.error).not.toBeNull();
+  expect(limited.properties).toEqual([]);
+  expect(readNoteMetadata(expansion).tags).toEqual(["visible"]);
+  for (const source of [
+    "---\nkey: [broken\n---\nbody",
+    "---\nkey: one\nkey: two\n---\nbody",
+  ]) {
+    expect(readNoteFrontmatter(source).error).not.toBeNull();
+    expect(() => updateNoteProperty(source, "key", "fixed")).toThrow();
+  }
+});
