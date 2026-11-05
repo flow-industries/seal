@@ -215,7 +215,7 @@ export interface DeviceVault {
   subscribeChanges(listener: () => void): () => void;
   /** Hears about every write that left another admin's code unsigned, or its links stale. */
   subscribeTrustLoss(listener: (loss: TrustLoss) => void): () => void;
-  /** Edits a rotation left in the earlier epoch's local database. */
+  /** Edits a rotation left in the earlier epoch's local database; `download` is refused once `stop()` began, like every other operation. */
   stranded?: StrandedEdits;
   /**
    * Refuses new operations, lets those already running finish, then wipes
@@ -601,7 +601,7 @@ export async function openDeviceVault(
       runners,
     });
   };
-  let vault: DeviceVault | undefined;
+  let opened: FencedVault | undefined;
   const port: SeedUnlockPort = {
     current: () => ({
       userId: credentials.userId,
@@ -636,13 +636,17 @@ export async function openDeviceVault(
           }),
       });
       const runtime = synchronizedRuntime(session, async () => transport);
-      vault = sessionVault(session, runtime, transport);
+      opened = sessionVault(session, runtime, transport);
       return runtime;
     },
   };
   const { stranded } = await unlockVaultWithSeed(port, seed);
-  if (!vault) throw new Error("Vault locked");
-  return stranded ? { ...vault, stranded } : vault;
+  if (!opened) throw new Error("Vault locked");
+  const { vault, tracked } = opened;
+  if (!stranded) return vault;
+  // The earlier epoch's database is opened on demand, so after `stop()` and `deleteDeviceStorage` a read would create it again.
+  const download = () => tracked(() => stranded.download());
+  return { ...vault, stranded: { count: stranded.count, download } };
 }
 
 const baseOf = (
@@ -659,12 +663,17 @@ async function swapped<T>(current: boolean, write: () => Promise<T>) {
     throw error;
   }
 }
+/** A device vault, and the fence its operations run through: refused once `stop()` began, and awaited by it. */
+interface FencedVault {
+  vault: DeviceVault;
+  tracked<T>(operation: () => Promise<T>): Promise<T>;
+}
 /** Only these closures leave the client: the session, its keys and the transport stay behind them. */
 function sessionVault(
   session: VaultSession,
   runtime: ReturnType<typeof synchronizedRuntime>,
   transport: AuthVaultTransport,
-): DeviceVault {
+): FencedVault {
   let stopped = false;
   let stopping: Promise<void> | undefined;
   const inFlight = new Set<Promise<unknown>>();
@@ -685,7 +694,7 @@ function sessionVault(
     runtime.lock();
     await runtime.settled();
   }
-  return {
+  const vault: DeviceVault = {
     read: () => tracked(() => runtime.read()),
     saveNote: (note, options = {}) =>
       tracked(async () => {
@@ -733,4 +742,5 @@ function sessionVault(
       return stopping;
     },
   };
+  return { vault, tracked };
 }

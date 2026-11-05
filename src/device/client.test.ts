@@ -25,11 +25,17 @@ import {
 import { noteEntry } from "../../tests/entry-fixture.ts";
 import { encryptedHeader, signedVault } from "../../tests/unlock-fixture.ts";
 import { AccessRemovedError } from "../app/runtime.ts";
-import { addVaultRecipient, linkedCheckpoint } from "../app/unlock.ts";
+import {
+  addVaultRecipient,
+  linkedCheckpoint,
+  signedState,
+} from "../app/unlock.ts";
 import {
   type AccessSigner,
   createSeedRecipient,
+  nextSequence,
   passkeyAdmin,
+  recipientsOf,
   seedRecipientFromKeys,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
@@ -45,17 +51,21 @@ import {
   sealLinkHandoff,
   typedPairingCode,
 } from "../crypto/link.ts";
+import { rekeySnapshot } from "../sync/rekey.ts";
 import type { SnapshotEntry } from "../sync/vault-snapshot.ts";
 import {
   AuthVaultTransport,
+  readVerifiedVaultRoot,
   type VaultRecordV2,
 } from "../sync/vault-transport.ts";
 import type { TrustLoss } from "../vault/session.ts";
+import { vaultDatabaseNames } from "../vault/storage.ts";
 import {
   createDeviceSeed,
   type DeviceCheckpointStore,
   type DeviceOptions,
   type DeviceVault,
+  deleteDeviceStorage,
   handedCheckpoint,
   LINK_EXPIRED,
   LINK_UNVERIFIED,
@@ -1257,3 +1267,74 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
     ).toBe(true);
   }, 30_000);
 });
+
+/** The admin re-keys the vault into the next epoch under a fresh key, keeping every recipient, as removing someone else does. */
+async function rotate(w: Linked) {
+  const record = w.note.record();
+  if (!record) throw new Error("Missing vault");
+  const { metadata } = await readVerifiedVaultRoot(
+    w.admin.key,
+    did,
+    record.value,
+  );
+  const reader = adminTransport(w);
+  const snapshot = await reader.readSnapshot();
+  reader.stop();
+  if (!snapshot) throw new Error("Missing snapshot");
+  const key = new Uint8Array(32).fill(11);
+  const { vault } = w.admin.state;
+  const state = await signedState(
+    key,
+    { did, vault, epoch: 2 },
+    {
+      kind: "change",
+      sequence: nextSequence(metadata, null),
+      recipients: recipientsOf(metadata),
+      signer: w.admin.admin,
+    },
+    "created",
+  );
+  const { entries } = await rekeySnapshot(
+    snapshot.entries,
+    { did, vault },
+    { key: w.admin.key, epoch: 1 },
+    { key, epoch: 2 },
+  );
+  const writer = new AuthVaultTransport(w.note.browserRpc, {
+    key,
+    did,
+    ...state,
+  });
+  await writer.writeSnapshot(entries, snapshot.cid);
+  writer.stop();
+}
+
+test("a rotation's stranded edits stay behind stop(), so deleting the device's storage stays final", async () => {
+  const w = await linked();
+  if (w.error) throw new Error(w.error);
+  const before = await open(w.seed, deviceOptions(w));
+  await before.sync();
+  await before.saveNote({
+    id: "offline",
+    path: "Offline.md",
+    source: "# Kept",
+  });
+  await before.stop();
+  await rotate(w);
+  const after = await open(w.seed, deviceOptions(w));
+  const { stranded } = after;
+  expect(stranded?.count).toBe(1);
+  const blob = await stranded?.download();
+  expect(JSON.parse((await blob?.text()) ?? "{}")).toMatchObject({
+    epoch: 1,
+    edits: [{ id: "offline" }],
+  });
+  await after.stop();
+  await deleteDeviceStorage(w.seed);
+  const own = `#${(await createSeedRecipient(w.seed, "device")).id}`;
+  const left = async () =>
+    (await vaultDatabaseNames()).filter((name) => name.endsWith(own));
+  expect(await left()).toEqual([]);
+  await expect(stranded?.download()).rejects.toThrow("Vault locked");
+  expect(await left()).toEqual([]);
+}, 30_000);
