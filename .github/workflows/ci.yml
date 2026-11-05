@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+# Only a pull request's runs cancel each other. A push to main, and the release
+# run that calls this workflow, always finish, so no version bump goes unpublished.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    uses: flow-industries/lint/.github/workflows/ts-check.yml@v1
+    with:
+      install-cmd: "bun x bun@1.4.2 install --frozen-lockfile"
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      - run: bun run test:node
+      - run: bun run test:package
+      - run: bun run size
