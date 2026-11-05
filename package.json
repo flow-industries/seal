@@ -1,6 +1,6 @@
 {
   "name": "@flow-industries/seal",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "End-to-end encrypted vault core: the container, signed access, journal sync and the device client",
   "type": "module",
   "license": "MIT",
