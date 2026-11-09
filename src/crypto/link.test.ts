@@ -132,6 +132,31 @@ describe("pairing code", () => {
       digest.mockRestore();
     }
   });
+  test("tries all six windows before hashing again", async () => {
+    const device = await createSeedRecipient(seed, "device");
+    const sixthWindowOnly = new Uint8Array(32);
+    for (let offset = 0; offset < 25; offset += 5)
+      sixthWindowOnly.set([0x5b, 0x1a, 0xf8, 0x46, 0x53], offset);
+    sixthWindowOnly.set([0x3c, 0xc7, 0x44, 0xdf, 0xbf], 25);
+    const real = crypto.subtle.digest.bind(crypto.subtle);
+    let calls = 0;
+    const digest = spyOn(crypto.subtle, "digest").mockImplementation(
+      (algorithm, data) => {
+        calls++;
+        return calls === 1
+          ? Promise.resolve(sixthWindowOnly.slice().buffer)
+          : real(algorithm, data);
+      },
+    );
+    try {
+      expect(
+        await pairingCode(device.boxPublicKey, device.signPublicKey ?? ""),
+      ).toBe("7K3M9QXZ");
+      expect(calls).toBe(1);
+    } finally {
+      digest.mockRestore();
+    }
+  });
   test("is never shaped like a user code, whatever the keys", async () => {
     const encode = (bytes: Uint8Array) =>
       sodium.to_base64(bytes, sodium.base64_variants.URLSAFE_NO_PADDING);

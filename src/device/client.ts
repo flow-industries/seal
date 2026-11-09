@@ -117,7 +117,13 @@ export interface LinkOptions extends DeviceOptions {
   label: string;
   kind?: NoteDeviceKind;
   onPrompt(prompt: LinkPrompt): void;
-  /** The NOTE origin whose link page approves this device; `https://note.flow.talk` unless set. */
+  /**
+   * The NOTE origin whose link page approves this device;
+   * `https://note.flow.talk` unless set. It must be `https:`, or `http:` on
+   * `localhost`, `127.0.0.1` or `[::1]`, with no credentials, path, query or
+   * fragment; anything else is refused with `INVALID_NOTE_ORIGIN` before
+   * Flow ID hears of the device.
+   */
   noteOrigin?: string;
   signal?: AbortSignal;
   /** How long to wait for the approving tab's change once Flow ID has issued the token; at most `PUBLISH_WAIT_MS`. */
@@ -272,6 +278,31 @@ export class NoteChangedError extends Error {
   }
 }
 const NOTE_ORIGIN = "https://note.flow.talk";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+export const INVALID_NOTE_ORIGIN =
+  "NOTE's address must be an https origin, or http on this machine.";
+/** `noteOrigin` as `LinkOptions.noteOrigin` requires it, or `INVALID_NOTE_ORIGIN`. */
+function linkOrigin(noteOrigin: string): string {
+  let url: URL;
+  try {
+    url = new URL(noteOrigin);
+  } catch {
+    throw new Error(INVALID_NOTE_ORIGIN);
+  }
+  const scheme =
+    url.protocol === "https:" ||
+    (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname));
+  if (
+    !scheme ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(INVALID_NOTE_ORIGIN);
+  return url.origin;
+}
 export const LINK_UNVERIFIED =
   "This device's link couldn't be verified. Link it again.";
 /**
@@ -509,6 +540,7 @@ export async function linkDevice(
   seed: Uint8Array,
   options: LinkOptions,
 ): Promise<DeviceCheckpoint> {
+  const noteOrigin = linkOrigin(options.noteOrigin ?? NOTE_ORIGIN);
   const elapsed = stopwatch();
   const secret = createLinkSecret();
   const transportOptions = options.fetch ? { fetch: options.fetch } : {};
@@ -528,7 +560,7 @@ export async function linkDevice(
   const code = normalizeUserCode(authorization.userCode);
   if (!code) throw new Error(LINK_UNVERIFIED);
   const userCode = `${code.slice(0, 4)}-${code.slice(4)}`;
-  const linkPage = new URL("/link", options.noteOrigin ?? NOTE_ORIGIN);
+  const linkPage = new URL("/link", noteOrigin);
   linkPage.searchParams.set("code", userCode);
   options.onPrompt({
     userCode,

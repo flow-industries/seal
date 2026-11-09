@@ -104,7 +104,7 @@ Production vaults depend on these bytes, so they never change in place:
 
 A new format gets a new version, and its reader ships before any writer. `tests/note-written-vault.test.ts` opens a vault written by NOTE's own code before this package existed, and the container and unlock tests carry further golden vectors. A change that breaks any of them is a format change, never a test to update.
 
-The link code (the device secret and the passkey pairing code, with their goldens in the same files) is not a vault format: no vault stores it, and a handoff sealed under it is read only within its link's ten-minute window. Its format may change only in a new minor version that says so, as 0.2.0 did when it went from twelve digits to eight symbols, and 0.3.0 when it kept passkey pairing codes out of a user code's shape. Outside such a version, a broken link-code golden means the change is wrong, like any other.
+The link code (the device secret and the passkey pairing code, with their goldens in the same files) is not a vault format: no vault stores it, and a handoff sealed under it is read only within its link's ten-minute window. Its format may change only in a new minor version that says so, as 0.2.0 did when it went from twelve digits to eight symbols, and 0.3.0 when it kept passkey pairing codes out of a user code's shape and replaced `LinkPrompt.verificationUri` with `linkPage`, which the device builds itself. Outside such a version, a broken link-code golden means the change is wrong, like any other.
 
 ## Development
 
