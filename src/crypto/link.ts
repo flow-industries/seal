@@ -98,7 +98,9 @@ export const typedPairingCode = (input: string) =>
 /**
  * Whether `code` can be a device secret: eight canonical symbols that no Flow
  * ID user code types as. Flow ID issues the user code, so a secret shaped like
- * one is a secret it may know, and could commit its own keys to.
+ * one is a secret it may know, and could commit its own keys to. Only for
+ * device secrets: a passkey pairing code is a digest, so about one in 43 takes
+ * that shape; compare a typed one to `pairingCode` exactly instead.
  */
 export const isLinkSecret = (code: string) =>
   LINK_SECRET.test(code) && !TYPED_USER_CODE.test(code);
