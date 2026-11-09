@@ -485,6 +485,9 @@ async function tokensBy(
  * for a code, shows the user a fresh secret to type in the approving tab,
  * waits for the approval, then accepts only the pin that tab sealed under
  * that secret to this seed. Saves the device's credentials and checkpoint.
+ * A user code outside Flow ID's user-code alphabet is refused with
+ * `LINK_UNVERIFIED` before the secret is shown, since it could be a secret
+ * Flow ID committed its own keys to.
  * The whole link runs on this device's clock: a code Flow ID says lasts
  * longer than `LINK_WINDOW_MS` is refused before the secret is shown, and no
  * token or handoff is taken once that window (plus up to `PUBLISH_WAIT_MS`
