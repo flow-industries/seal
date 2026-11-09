@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import sodium from "libsodium-wrappers-sumo";
+import { commitmentToAnySecret } from "../../tests/commitment-to-any-secret.ts";
 import {
   NOTE_ORIGIN,
   PASSKEY_RP_ID,
@@ -21,7 +22,11 @@ import {
   passkeyAdmin,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
-import { linkCommitment, sealLinkHandoff } from "../crypto/link.ts";
+import {
+  linkCommitment,
+  sealLinkHandoff,
+  typedPairingCode,
+} from "../crypto/link.ts";
 import { passkeyRequestChallenge } from "../crypto/passkey-proof.ts";
 import { handedCheckpoint, LINK_UNVERIFIED } from "../device/client.ts";
 import {
@@ -59,7 +64,7 @@ import {
 Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 const did = "did:plc:link";
-const SECRET = "123456789012";
+const SECRET = "7K3M9QXZ";
 const prfFor = (fill: number) => new Uint8Array(32).fill(fill);
 
 /** A PDS holding one record, and a browser port for whichever passkey is connected. */
@@ -329,7 +334,7 @@ describe("linking a device", () => {
         signPublicKey: f.admin.recipient.signPublicKey ?? "",
       },
     ]);
-    expect(await handed(f, seed, "123456789013")).toBeNull();
+    expect(await handed(f, seed, "7K3M9QXY")).toBeNull();
     expect(await handed(f, new Uint8Array(32).fill(4))).toBeNull();
   });
   test("the person sees everyone the change carries, marked against this browser's earlier pin, and can stop it", async () => {
@@ -1119,14 +1124,14 @@ describe("Flow ID knows the user code but never the device's secret", () => {
         did,
       ),
     });
-    // Flow ID issued the user code and saw it in plaintext; it is no longer the key.
+    // Flow ID issued the user code and saw it in plaintext; typed as the device code, it is still never the key.
     await expect(
       sealLinkHandoff(
-        { secret: "BCDF-GHJK", did, recipient: device },
+        { secret: typedPairingCode("BCDF-GHJK"), did, recipient: device },
         linkedCheckpoint(state),
       ),
     ).rejects.toThrow("Invalid link secret");
-    for (const guess of ["000000000000", "123456789013", "999999999999"]) {
+    for (const guess of ["00000000", "7K3M9QXY", "YYYYYYYY"]) {
       const forged = await sealLinkHandoff(
         { secret: guess, did, recipient: device },
         linkedCheckpoint(state),
@@ -1158,7 +1163,7 @@ describe("Flow ID knows the user code but never the device's secret", () => {
     // Swapped keys under the device's real commitment, or under one Flow ID made for a secret of its own.
     for (const commitment of [
       commitments.get(recipient.id) ?? "",
-      await linkCommitment("555555555555", committed(swapped)),
+      await linkCommitment("55555555", committed(swapped)),
     ])
       await expect(
         addVaultRecipient(
@@ -1170,10 +1175,36 @@ describe("Flow ID knows the user code but never the device's secret", () => {
     await expect(
       addVaultRecipient(
         port,
-        request(recipient, g, accept, { secret: "123456789013" }),
+        request(recipient, g, accept, { secret: "7K3M9QXY" }),
         enabled,
       ),
     ).rejects.toThrow(LINK_SECRET_MISMATCH);
+    expect(calls.prompts).toBe(0);
+    expect(g.calls.approved).toBe(0);
+    expect(f.writes).toHaveLength(0);
+  });
+  test("a user code typed as the device code matches nothing, not even a commitment Flow ID made to it under its own keys", async () => {
+    const f = await fixture();
+    const swapped = await createSeedRecipient(
+      new Uint8Array(32).fill(44),
+      "device",
+      "Laptop",
+    );
+    const { port, calls } = counted(f);
+    const g = grant();
+    for (const userCode of ["MPZX-MWBM", "BCDL-MNPQ"]) {
+      const typed = typedPairingCode(userCode);
+      await expect(
+        addVaultRecipient(
+          port,
+          request(swapped, g, accept, {
+            secret: typed,
+            commitment: await commitmentToAnySecret(typed, committed(swapped)),
+          }),
+          enabled,
+        ),
+      ).rejects.toThrow(LINK_SECRET_MISMATCH);
+    }
     expect(calls.prompts).toBe(0);
     expect(g.calls.approved).toBe(0);
     expect(f.writes).toHaveLength(0);

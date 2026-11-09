@@ -9,8 +9,11 @@ import {
 
 const encoder = new TextEncoder();
 const USER_CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{8}$/;
-const PAIRING_DIGITS = 12;
-const LINK_SECRET = /^\d{12}$/;
+const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const CODE_LENGTH = 8;
+const LINK_SECRET = /^[0-9A-HJKMNP-TV-Z]{8}$/;
+/** Every Flow ID user code as `typedPairingCode` reads it: its consonants, with L as 1. */
+const TYPED_USER_CODE = /^[1BCDFGHJKMNPQRSTVWXZ]{8}$/;
 /**
  * Argon2id cost of the link-secret commitment. Device and tab must agree on it
  * forever, so it never changes in place. The secret has only about 2^40
@@ -45,10 +48,25 @@ export function normalizeUserCode(input: string): string | null {
 }
 
 /**
- * The digits a linking device shows and the approving browser makes the user
- * type. They commit to both public keys, so a key swapped between the device
- * and the browser shows different digits; twelve make grinding a matching key
- * within the code's ten minutes costly.
+ * Five bytes, exactly 40 bits, as eight Crockford base32 symbols, most
+ * significant bits first. Each symbol takes five whole bits, so uniform bytes
+ * give uniform symbols.
+ */
+export function codeSymbols(bytes: Uint8Array): string {
+  if (bytes.length !== 5) throw new Error("A code takes exactly five bytes");
+  const value = bytes.reduce((sum, byte) => (sum << 8n) | BigInt(byte), 0n);
+  return Array.from(
+    { length: CODE_LENGTH },
+    (_, index) =>
+      CODE_ALPHABET[Number((value >> BigInt(35 - 5 * index)) & 31n)],
+  ).join("");
+}
+
+/**
+ * The code a linking device shows and the approving browser makes the user
+ * type. It commits to both public keys, so a key swapped between the device
+ * and the browser shows a different code; its 40 bits make grinding a
+ * matching key within the code's ten minutes costly.
  */
 export async function pairingCode(
   boxPublicKey: string,
@@ -60,28 +78,42 @@ export async function pairingCode(
     decode(boxPublicKey),
     decode(signPublicKey),
   );
-  return (
-    new DataView(digest.buffer).getBigUint64(0) %
-    10n ** BigInt(PAIRING_DIGITS)
-  )
-    .toString()
-    .padStart(PAIRING_DIGITS, "0");
+  return codeSymbols(digest.subarray(0, 5));
 }
+/** A code as shown: `XXXX XXXX`, spaced rather than hyphenated so it never reads as a Flow ID user code. */
 export const formatPairingCode = (code: string) =>
-  code.replace(/(\d{4})(?=\d)/g, "$1 ");
-export const typedPairingCode = (input: string) => input.replace(/\D/g, "");
+  code.replace(/^(.{4})(?=.)/, "$1 ");
+/**
+ * A code as typed, in canonical form: uppercase, O read as 0 and I or L as 1,
+ * everything outside `[0-9A-Z]` dropped. It is a code only when that leaves
+ * eight symbols of the alphabet.
+ */
+export const typedPairingCode = (input: string) =>
+  input
+    .toUpperCase()
+    .replace(/O/g, "0")
+    .replace(/[IL]/g, "1")
+    .replace(/[^0-9A-Z]/g, "");
+
+/**
+ * Whether `code` can be a device secret: eight canonical symbols that no Flow
+ * ID user code types as. Flow ID issues the user code, so a secret shaped like
+ * one is a secret it may know, and could commit its own keys to.
+ */
+export const isLinkSecret = (code: string) =>
+  LINK_SECRET.test(code) && !TYPED_USER_CODE.test(code);
 
 /**
  * The device secret a linking device shows and the user types into the
- * approving tab: 12 uniform random digits that never leave the device any
- * other way, so Flow ID, which relays everything else, never learns them.
+ * approving tab: eight random symbols that never leave the device any other
+ * way, so Flow ID, which relays everything else, never learns them. A draw
+ * shaped like a user code (about one in 43) is drawn again, which leaves
+ * about 2^39.97 secrets, all equally likely.
  */
 export function createLinkSecret(): string {
-  const bound = 10n ** BigInt(PAIRING_DIGITS);
   for (;;) {
-    const bytes = crypto.getRandomValues(new Uint8Array(5));
-    const value = bytes.reduce((sum, byte) => (sum << 8n) | BigInt(byte), 0n);
-    if (value < bound) return value.toString().padStart(PAIRING_DIGITS, "0");
+    const secret = codeSymbols(crypto.getRandomValues(new Uint8Array(5)));
+    if (isLinkSecret(secret)) return secret;
   }
 }
 /** What a link commitment covers besides the secret: everything the approving tab will enroll. */
@@ -122,8 +154,8 @@ async function commitmentHash(
  * The slow-hash commitment the device registers at Flow ID: a fresh 16-byte
  * nonce, then Argon2id of the secret salted with that nonce, the device's
  * kind, label and both public keys. The approving tab recomputes it from the
- * digits the user types and what Flow ID returned, so a kind, label or key
- * swapped in between, or digits mistyped, don't match; Flow ID can only find
+ * code the user types and what Flow ID returned, so a kind, label or key
+ * swapped in between, or a code mistyped, doesn't match; Flow ID can only find
  * the secret behind it by an Argon2id search that starts over with each link.
  */
 export async function linkCommitment(
@@ -131,7 +163,7 @@ export async function linkCommitment(
   request: CommittedRequest,
   nonce = crypto.getRandomValues(new Uint8Array(COMMITMENT_NONCE_BYTES)),
 ): Promise<string> {
-  if (!LINK_SECRET.test(secret)) throw new Error("Invalid link secret");
+  if (!isLinkSecret(secret)) throw new Error("Invalid link secret");
   if (nonce.length !== COMMITMENT_NONCE_BYTES)
     throw new Error("Invalid link nonce");
   const hash = await commitmentHash(secret, request, nonce);
@@ -153,7 +185,7 @@ export async function matchesLinkCommitment(
   request: CommittedRequest,
   commitment: string,
 ): Promise<boolean> {
-  if (!LINK_SECRET.test(secret)) return false;
+  if (!isLinkSecret(secret)) return false;
   await sodium.ready;
   let bytes: Uint8Array;
   try {
@@ -216,7 +248,7 @@ async function linkTag(
   { secret, did, recipient }: LinkContext,
   checkpoint: LinkedCheckpoint,
 ): Promise<Uint8Array> {
-  if (!LINK_SECRET.test(secret)) throw new Error("Invalid link secret");
+  if (!isLinkSecret(secret)) throw new Error("Invalid link secret");
   const key = await deriveSeed(
     encoder.encode(secret),
     await sha256(

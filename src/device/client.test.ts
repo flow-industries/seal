@@ -145,7 +145,9 @@ async function linked(
     pending.boxPublicKey ?? "",
     pending.signPublicKey ?? "",
   ] as const;
-  expect(shown.pairingCode).toMatch(/^\d{4} \d{4} \d{4}$/);
+  expect(shown.pairingCode).toMatch(
+    /^[0-9A-HJKMNP-TV-Z]{4} [0-9A-HJKMNP-TV-Z]{4}$/,
+  );
   const typed = typedPairingCode(shown.pairingCode);
   await addVaultRecipient(
     admin.port,
@@ -345,8 +347,8 @@ describe("device client", () => {
       {
         recipient: second,
         link: {
-          secret: "123456789012",
-          commitment: await linkCommitment("123456789012", {
+          secret: "7K3M9QXZ",
+          commitment: await linkCommitment("7K3M9QXZ", {
             kind: "device",
             label: "Phone",
             boxPublicKey: second.boxPublicKey,
@@ -369,7 +371,7 @@ describe("device client", () => {
 
   test("a device listed with a handoff sealed under any secret but its own refuses to link", async () => {
     const { checkpoints, checkpoint, error, removals } = await linked({
-      sealedWith: "000000000000",
+      sealedWith: "00000000",
       publishTimeoutMs: 3000,
     });
     expect(checkpoint).toBeNull();
@@ -982,6 +984,7 @@ function stalling(
   token: () => Response | Promise<Response>,
   records: () => VaultRecordV2 | null | Promise<VaultRecordV2 | null> = () =>
     null,
+  userCode = "BCDF-GHJK",
 ) {
   const authorized: Record<string, string>[] = [];
   const calls = { token: 0, records: 0 };
@@ -991,8 +994,8 @@ function stalling(
       authorized.push(JSON.parse(String(init.body)));
       return Response.json({
         deviceCode: "fndc_window",
-        userCode: "BCDF-GHJK",
-        verificationUri: "https://note.example/link?code=BCDF-GHJK",
+        userCode,
+        verificationUri: `https://note.example/link?code=${userCode}`,
         interval: 1,
         expiresIn,
       });
@@ -1122,6 +1125,19 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
     expect(flowId.calls.token).toBe(0);
   });
 
+  test("a user code Flow ID makes outside the user-code alphabet is refused before the secret is shown", async () => {
+    for (const userCode of ["7K3M-9QXZ", "7K3M9QXZ", "BCDF-GHJ"]) {
+      const flowId = stalling(600, issued, undefined, userCode);
+      const { prompts, outcome } = attempt(createDeviceSeed(), flowId);
+      expect(await outcome).toEqual({
+        checkpoint: null,
+        error: LINK_UNVERIFIED,
+      });
+      expect(prompts).toEqual([]);
+      expect(flowId.calls.token).toBe(0);
+    }
+  });
+
   test("a Flow ID that stalls the token past the device's ten minutes gets no link, whatever it serves later", async () => {
     const flowId = stalling(LINK_WINDOW_MS / 1000, () => {
       // Each poll stands for minutes of a search Flow ID is running on the commitment.
@@ -1142,7 +1158,7 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
   test("a handoff Flow ID could only seal after the window, once it had the secret, is never accepted", async () => {
     const seed = createDeviceSeed();
     // Until its search of the commitment finishes, Flow ID serves a vault that doesn't list the device, while the clock runs on.
-    const decoy = await substitute(seed, "000000000000", false);
+    const decoy = await substitute(seed, "00000000", false);
     const searchDone = Date.now() + LINK_WINDOW_MS + 2 * 60_000;
     let forged: Awaited<ReturnType<typeof substitute>> | null = null;
     const flowId = stalling(LINK_WINDOW_MS / 1000, issued, () => {
@@ -1214,7 +1230,7 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
 
   test("a caller can't stretch the handoff wait past PUBLISH_WAIT_MS", async () => {
     const seed = createDeviceSeed();
-    const decoy = await substitute(seed, "000000000000", false);
+    const decoy = await substitute(seed, "00000000", false);
     const flowId = stalling(LINK_WINDOW_MS / 1000, issued, () => {
       advance(30_000);
       return decoy.header;

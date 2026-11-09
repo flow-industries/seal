@@ -9,11 +9,16 @@ import {
   type SeedUnlockPort,
   unlockVaultWithSeed,
 } from "../src/app/unlock.ts";
-import { unwrapAccessKey, v2PrfInput } from "../src/crypto/access-v2.ts";
+import {
+  deriveSeed,
+  unwrapAccessKey,
+  v2PrfInput,
+} from "../src/crypto/access-v2.ts";
 import {
   acceptAccess,
   accessMetadataSchema,
   createSeedRecipient,
+  openSealedToSeed,
   openWithSeed,
   passkeyAdmin,
   passkeyBinding,
@@ -33,6 +38,8 @@ import {
   linkCommitment,
   matchesLinkCommitment,
   pairingCode,
+  sealLinkHandoff,
+  typedPairingCode,
 } from "../src/crypto/link.ts";
 import { passkeyRequestChallenge } from "../src/crypto/passkey-proof.ts";
 import { handedCheckpoint } from "../src/device/client.ts";
@@ -126,12 +133,58 @@ test("the device's seed and the admin passkey's PRF both open the vault NOTE wro
   await acceptAccess(metadata, { did, vault, epoch }, checkpoint.pinned);
 });
 
-test("the handoff NOTE sealed to the device yields the same checkpoint, and seed unlock accepts the header", async () => {
-  const { seed } = await material();
-  expect(await handedCheckpoint({ header: record }, seed, did, secret)).toEqual(
+/** The link tag as NOTE keyed it, kept apart from `src/` so a changed domain string there fails here. */
+async function linkTagAsNoteKeyed(code: string, recipientId: string) {
+  const derivationSalt = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        JSON.stringify(["flow-note/v3/link", did, recipientId]),
+      ),
+    ),
+  );
+  const key = await deriveSeed(
+    new TextEncoder().encode(code),
+    derivationSalt,
+    "flow-note/v3/link-secret-key",
+  );
+  return sodium.crypto_auth_hmacsha256(
+    new TextEncoder().encode(
+      JSON.stringify([
+        "flow-note/v3/link",
+        did,
+        recipientId,
+        checkpoint.vault,
+        checkpoint.epoch,
+        checkpoint.pinned.statement,
+        checkpoint.trust,
+      ]),
+    ),
+    key,
+  );
+}
+
+test("the handoff NOTE sealed to the device is keyed as seal keys one, and seed unlock accepts the header", async () => {
+  const { key, seed } = await material();
+  const own = await createSeedRecipient(seed, "device");
+  const { metadata } = await readVerifiedVaultRoot(key, did, record);
+  if (!("version" in metadata) || !metadata.link)
+    throw new Error("NOTE's vault carries no handoff");
+  expect(await openSealedToSeed(decode(metadata.link.sealed), seed)).toEqual(
+    await linkTagAsNoteKeyed(secret, own.id),
+  );
+  // NOTE sealed this handoff under a twelve-digit code; codes are eight symbols now, and nothing reads the old form.
+  await expect(
+    handedCheckpoint({ header: record }, seed, did, secret),
+  ).rejects.toThrow("Invalid link secret");
+  const code = typedPairingCode(golden.pairing);
+  const handoff = await sealLinkHandoff(
+    { secret: code, did, recipient: own },
     checkpoint,
   );
-  const own = await createSeedRecipient(seed, "device");
+  expect(await openSealedToSeed(decode(handoff.sealed), seed)).toEqual(
+    await linkTagAsNoteKeyed(code, own.id),
+  );
   let saved: Checkpoint | null = null;
   const port: SeedUnlockPort = {
     current: () => ({
@@ -181,14 +234,14 @@ test("keys, recipient ids, the pairing code and the device's link messages deriv
   ).toBe(golden.deviceAuthorize);
   expect(
     await linkCommitment(
-      "123456789012",
+      typedPairingCode(golden.pairing),
       golden.committed,
       new Uint8Array(16).fill(3),
     ),
   ).toBe(golden.commitment);
   expect(
     await matchesLinkCommitment(
-      "123456789012",
+      typedPairingCode(golden.pairing),
       golden.committed,
       golden.commitment,
     ),
