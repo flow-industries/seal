@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import sodium from "libsodium-wrappers-sumo";
+import { commitmentToAnySecret } from "../../tests/commitment-to-any-secret.ts";
 import {
   NOTE_ORIGIN,
   PASSKEY_RP_ID,
@@ -21,7 +22,11 @@ import {
   passkeyAdmin,
   type VaultRecipient,
 } from "../crypto/access-v3.ts";
-import { linkCommitment, sealLinkHandoff } from "../crypto/link.ts";
+import {
+  linkCommitment,
+  sealLinkHandoff,
+  typedPairingCode,
+} from "../crypto/link.ts";
 import { passkeyRequestChallenge } from "../crypto/passkey-proof.ts";
 import { handedCheckpoint, LINK_UNVERIFIED } from "../device/client.ts";
 import {
@@ -1119,14 +1124,14 @@ describe("Flow ID knows the user code but never the device's secret", () => {
         did,
       ),
     });
-    // Flow ID issued the user code and saw it in plaintext; it is no longer the key.
+    // Flow ID issued the user code and saw it in plaintext; typed as the device code, it is still never the key.
     await expect(
       sealLinkHandoff(
-        { secret: "BCDF-GHJK", did, recipient: device },
+        { secret: typedPairingCode("BCDF-GHJK"), did, recipient: device },
         linkedCheckpoint(state),
       ),
     ).rejects.toThrow("Invalid link secret");
-    for (const guess of ["00000000", "7K3M9QXY", "ZZZZZZZZ"]) {
+    for (const guess of ["00000000", "7K3M9QXY", "YYYYYYYY"]) {
       const forged = await sealLinkHandoff(
         { secret: guess, did, recipient: device },
         linkedCheckpoint(state),
@@ -1174,6 +1179,32 @@ describe("Flow ID knows the user code but never the device's secret", () => {
         enabled,
       ),
     ).rejects.toThrow(LINK_SECRET_MISMATCH);
+    expect(calls.prompts).toBe(0);
+    expect(g.calls.approved).toBe(0);
+    expect(f.writes).toHaveLength(0);
+  });
+  test("a user code typed as the device code matches nothing, not even a commitment Flow ID made to it under its own keys", async () => {
+    const f = await fixture();
+    const swapped = await createSeedRecipient(
+      new Uint8Array(32).fill(44),
+      "device",
+      "Laptop",
+    );
+    const { port, calls } = counted(f);
+    const g = grant();
+    for (const userCode of ["MPZX-MWBM", "BCDL-MNPQ"]) {
+      const typed = typedPairingCode(userCode);
+      await expect(
+        addVaultRecipient(
+          port,
+          request(swapped, g, accept, {
+            secret: typed,
+            commitment: await commitmentToAnySecret(typed, committed(swapped)),
+          }),
+          enabled,
+        ),
+      ).rejects.toThrow(LINK_SECRET_MISMATCH);
+    }
     expect(calls.prompts).toBe(0);
     expect(g.calls.approved).toBe(0);
     expect(f.writes).toHaveLength(0);

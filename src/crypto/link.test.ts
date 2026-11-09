@@ -1,11 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import sodium from "libsodium-wrappers-sumo";
+import { commitmentToAnySecret } from "../../tests/commitment-to-any-secret.ts";
 import { createSeedRecipient } from "./access-v3.ts";
 import {
   codeSymbols,
   createLinkSecret,
   deviceAuthorizeMessage,
   formatPairingCode,
+  isLinkSecret,
   type LinkedCheckpoint,
   linkCommitment,
   matchesLinkCommitment,
@@ -174,7 +176,7 @@ describe("link handoff", () => {
       ),
     ).toBe(false);
   });
-  test("refuses anything but eight canonical symbols, twelve digits and Flow ID's hyphenated user code included", async () => {
+  test("refuses anything but eight canonical symbols outside a user code's shape, twelve digits included", async () => {
     const recipient = await createSeedRecipient(seed, "device");
     for (const secret of [
       "123456789012",
@@ -187,6 +189,8 @@ describe("link handoff", () => {
       "7K3M9QXL",
       "7K3M9QXO",
       "7K3M9QXI",
+      "BCDFGHJK",
+      "BCD1MNPQ",
       "",
     ])
       await expect(
@@ -200,7 +204,7 @@ describe("link handoff", () => {
       verifyLinkHandoff(
         handoff,
         seed,
-        { secret: "123456789012", did, recipient },
+        { secret: "BCDFGHJK", did, recipient },
         checkpoint,
       ),
     ).rejects.toThrow("Invalid link secret");
@@ -208,15 +212,45 @@ describe("link handoff", () => {
 });
 
 describe("link secret", () => {
-  test("is eight symbols, fresh each time", () => {
+  test("is eight symbols, never a user code's shape, fresh each time", () => {
     const secrets = Array.from({ length: 200 }, createLinkSecret);
-    for (const secret of secrets)
+    for (const secret of secrets) {
       expect(secret).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
+      expect(isLinkSecret(secret)).toBe(true);
+    }
     expect(new Set(secrets).size).toBe(200);
+  });
+  test("draws again while a draw reads as a Flow ID user code", () => {
+    const draws = [
+      [0x5b, 0x1a, 0xf8, 0x46, 0x53],
+      [0xa5, 0xbf, 0xda, 0x71, 0x74],
+      [0x3c, 0xc7, 0x44, 0xdf, 0xbf],
+    ];
+    let calls = 0;
+    const random = spyOn(crypto, "getRandomValues").mockImplementation(
+      <T extends ArrayBufferView | null>(array: T) => {
+        expect(array?.byteLength).toBe(5);
+        if (array instanceof Uint8Array) array.set(draws[calls] ?? []);
+        calls++;
+        return array;
+      },
+    );
+    try {
+      expect(draws.map((draw) => codeSymbols(Uint8Array.from(draw)))).toEqual([
+        "BCDFGHJK",
+        "MPZXMWBM",
+        "7K3M9QXZ",
+      ]);
+      expect(createLinkSecret()).toBe("7K3M9QXZ");
+      expect(calls).toBe(3);
+    } finally {
+      random.mockRestore();
+    }
   });
   test("is five random bytes, one symbol per five bits", () => {
     const random = spyOn(crypto, "getRandomValues").mockImplementation(
       <T extends ArrayBufferView | null>(array: T) => {
+        expect(array?.byteLength).toBe(5);
         if (array instanceof Uint8Array)
           array.set([0x00, 0x44, 0x32, 0x14, 0xc7]);
         return array;
@@ -271,30 +305,9 @@ describe("link secret", () => {
     );
     const nonce = bytes.slice(0, 16);
     expect(await linkCommitment("7K3M9QXZ", request, nonce)).toBe(commitment);
-    const salt = new Uint8Array(
-      await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(
-          JSON.stringify([
-            "flow-note/v3/link-commitment",
-            sodium.to_base64(nonce, sodium.base64_variants.URLSAFE_NO_PADDING),
-            "device",
-            "Laptop",
-            request.boxPublicKey,
-            request.signPublicKey,
-          ]),
-        ),
-      ),
+    expect(await commitmentToAnySecret("7K3M9QXZ", request, nonce)).toBe(
+      commitment,
     );
-    const argon = sodium.crypto_pwhash(
-      16,
-      new TextEncoder().encode("7K3M9QXZ"),
-      salt.slice(0, 16),
-      3,
-      64 * 1024 * 1024,
-      sodium.crypto_pwhash_ALG_ARGON2ID13,
-    );
-    expect([...bytes.slice(16)]).toEqual([...argon]);
   });
   test("checking a commitment throws, rather than reading as a mismatch, when Argon2id can't run", async () => {
     const device = await createSeedRecipient(seed, "device");
@@ -368,9 +381,96 @@ describe("code symbols", () => {
     }
     expect(bitsPerSymbol).toEqual(new Array(8).fill(5));
   });
-  test("read only the first five bytes", () => {
-    expect(codeSymbols(Uint8Array.of(0, 0, 0, 0, 0, 0xff, 0xff))).toBe(
-      "00000000",
+  test("take exactly five bytes", () => {
+    for (const length of [0, 4, 6, 32])
+      expect(() => codeSymbols(new Uint8Array(length))).toThrow(
+        "A code takes exactly five bytes",
+      );
+  });
+});
+
+describe("a Flow ID user code is never a link secret", () => {
+  test("whichever way it is typed, it fails every gate", async () => {
+    const recipient = await createSeedRecipient(seed, "device");
+    const request = {
+      kind: "device",
+      label: "Laptop",
+      boxPublicKey: recipient.boxPublicKey,
+      signPublicKey: recipient.signPublicKey ?? "",
+    };
+    const honest = await linkCommitment("7K3M9QXZ", request);
+    const handoff = await sealLinkHandoff(
+      { secret: "7K3M9QXZ", did, recipient },
+      checkpoint,
     );
+    for (const userCode of [
+      "MPZX-MWBM",
+      "MPZXMWBM",
+      "mpzx-mwbm",
+      "BCDL-MNPQ",
+      "bcdlmnpq",
+      "BCDL MNPQ",
+      "LLLL-LLLL",
+      "ZZZZ-ZZZZ",
+    ]) {
+      expect(normalizeUserCode(userCode)).not.toBeNull();
+      const typed = typedPairingCode(userCode);
+      expect(typed).toHaveLength(8);
+      for (const secret of [typed, userCode]) {
+        expect(isLinkSecret(secret)).toBe(false);
+        await expect(linkCommitment(secret, request)).rejects.toThrow(
+          "Invalid link secret",
+        );
+        expect(await matchesLinkCommitment(secret, request, honest)).toBe(
+          false,
+        );
+        await expect(
+          sealLinkHandoff({ secret, did, recipient }, checkpoint),
+        ).rejects.toThrow("Invalid link secret");
+        await expect(
+          verifyLinkHandoff(
+            handoff,
+            seed,
+            { secret, did, recipient },
+            checkpoint,
+          ),
+        ).rejects.toThrow("Invalid link secret");
+      }
+    }
+  });
+  test("not even against a commitment Flow ID made to it, with or without an L", async () => {
+    const recipient = await createSeedRecipient(seed, "device");
+    const request = {
+      kind: "device",
+      label: "Laptop",
+      boxPublicKey: recipient.boxPublicKey,
+      signPublicKey: recipient.signPublicKey ?? "",
+    };
+    for (const userCode of ["MPZX-MWBM", "BCDL-MNPQ"]) {
+      const typed = typedPairingCode(userCode);
+      const forged = await commitmentToAnySecret(typed, request);
+      expect(await matchesLinkCommitment(typed, request, forged)).toBe(false);
+    }
+  });
+  test("every user-code letter, in every position, types into the refused shape", () => {
+    for (const letter of "BCDFGHJKLMNPQRSTVWXZ")
+      for (let position = 0; position < 8; position++) {
+        const userCode = `${"MPZXMWBM".slice(0, position)}${letter}${"MPZXMWBM".slice(position + 1)}`;
+        expect(normalizeUserCode(userCode)).toBe(userCode);
+        expect(isLinkSecret(typedPairingCode(userCode))).toBe(false);
+      }
+  });
+  test("one symbol outside the user-code letters makes a code a secret again", () => {
+    for (const code of ["7K3M9QXZ", "BCDFGHJ0", "1111111A", "AAAAAAAA"])
+      expect(isLinkSecret(code)).toBe(true);
+    for (const code of [
+      "7K3M9QXU",
+      "7k3m9qxz",
+      "7K3M 9QXZ",
+      "11111111",
+      "BCDFGHJK",
+      "123456789012",
+    ])
+      expect(isLinkSecret(code)).toBe(false);
   });
 });

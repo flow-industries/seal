@@ -984,6 +984,7 @@ function stalling(
   token: () => Response | Promise<Response>,
   records: () => VaultRecordV2 | null | Promise<VaultRecordV2 | null> = () =>
     null,
+  userCode = "BCDF-GHJK",
 ) {
   const authorized: Record<string, string>[] = [];
   const calls = { token: 0, records: 0 };
@@ -993,8 +994,8 @@ function stalling(
       authorized.push(JSON.parse(String(init.body)));
       return Response.json({
         deviceCode: "fndc_window",
-        userCode: "BCDF-GHJK",
-        verificationUri: "https://note.example/link?code=BCDF-GHJK",
+        userCode,
+        verificationUri: `https://note.example/link?code=${userCode}`,
         interval: 1,
         expiresIn,
       });
@@ -1122,6 +1123,19 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
     expect(await outcome).toEqual({ checkpoint: null, error: LINK_EXPIRED });
     expect(prompts).toEqual([]);
     expect(flowId.calls.token).toBe(0);
+  });
+
+  test("a user code Flow ID makes outside the user-code alphabet is refused before the secret is shown", async () => {
+    for (const userCode of ["7K3M-9QXZ", "7K3M9QXZ", "BCDF-GHJ"]) {
+      const flowId = stalling(600, issued, undefined, userCode);
+      const { prompts, outcome } = attempt(createDeviceSeed(), flowId);
+      expect(await outcome).toEqual({
+        checkpoint: null,
+        error: LINK_UNVERIFIED,
+      });
+      expect(prompts).toEqual([]);
+      expect(flowId.calls.token).toBe(0);
+    }
   });
 
   test("a Flow ID that stalls the token past the device's ten minutes gets no link, whatever it serves later", async () => {

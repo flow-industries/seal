@@ -37,6 +37,7 @@ import {
   formatPairingCode,
   type LinkedCheckpoint,
   linkCommitment,
+  normalizeUserCode,
   verifyLinkHandoff,
 } from "../crypto/link.ts";
 import {
@@ -510,6 +511,9 @@ export async function linkDevice(
   );
   if (authorization.expiresIn * 1000 > LINK_WINDOW_MS)
     throw new Error(LINK_EXPIRED);
+  // Flow ID picks the user code; one outside the user-code alphabet could be a secret it committed its own keys to, waiting to be typed.
+  if (!normalizeUserCode(authorization.userCode))
+    throw new Error(LINK_UNVERIFIED);
   options.onPrompt({
     userCode: authorization.userCode,
     verificationUri: authorization.verificationUri,

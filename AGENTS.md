@@ -14,6 +14,8 @@ Imports are relative with a `.ts` extension; `tsc` rewrites them to `.js` in `di
 
 Every byte a vault stores is frozen: the record and item schemas, container and journal framing, every `flow-note/…` domain-separation string, salt derivation, signing message, recipient-id derivation and the slot count. Production vaults depend on them. Never edit one in place; a new format gets a new version, and its reader ships before any writer. `tests/note-written-vault.test.ts` and its fixture hold a vault NOTE's own code wrote, and the container and unlock tests carry further golden vectors. If a change breaks one of them, the change is wrong, not the test.
 
+The link code (device secret and passkey pairing code) is the one golden that isn't a vault format: no vault stores it, and its handoff is read only within the link's ten-minute window. It may change only in a new minor version that says so (0.2.0 moved it from twelve digits to eight symbols that never take a Flow ID user code's shape). Outside such a version, a broken link-code golden means the change is wrong, as with every other golden.
+
 ## Security rules
 
 - Never serialize keys, seeds, PRF output, recovery material or plaintext into logs, errors, URLs or telemetry.
