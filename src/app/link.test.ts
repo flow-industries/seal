@@ -59,7 +59,7 @@ import {
 Dexie.dependencies.indexedDB = indexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
 const did = "did:plc:link";
-const SECRET = "123456789012";
+const SECRET = "7K3M9QXZ";
 const prfFor = (fill: number) => new Uint8Array(32).fill(fill);
 
 /** A PDS holding one record, and a browser port for whichever passkey is connected. */
@@ -329,7 +329,7 @@ describe("linking a device", () => {
         signPublicKey: f.admin.recipient.signPublicKey ?? "",
       },
     ]);
-    expect(await handed(f, seed, "123456789013")).toBeNull();
+    expect(await handed(f, seed, "7K3M9QXY")).toBeNull();
     expect(await handed(f, new Uint8Array(32).fill(4))).toBeNull();
   });
   test("the person sees everyone the change carries, marked against this browser's earlier pin, and can stop it", async () => {
@@ -1126,7 +1126,7 @@ describe("Flow ID knows the user code but never the device's secret", () => {
         linkedCheckpoint(state),
       ),
     ).rejects.toThrow("Invalid link secret");
-    for (const guess of ["000000000000", "123456789013", "999999999999"]) {
+    for (const guess of ["00000000", "7K3M9QXY", "ZZZZZZZZ"]) {
       const forged = await sealLinkHandoff(
         { secret: guess, did, recipient: device },
         linkedCheckpoint(state),
@@ -1158,7 +1158,7 @@ describe("Flow ID knows the user code but never the device's secret", () => {
     // Swapped keys under the device's real commitment, or under one Flow ID made for a secret of its own.
     for (const commitment of [
       commitments.get(recipient.id) ?? "",
-      await linkCommitment("555555555555", committed(swapped)),
+      await linkCommitment("55555555", committed(swapped)),
     ])
       await expect(
         addVaultRecipient(
@@ -1170,7 +1170,7 @@ describe("Flow ID knows the user code but never the device's secret", () => {
     await expect(
       addVaultRecipient(
         port,
-        request(recipient, g, accept, { secret: "123456789013" }),
+        request(recipient, g, accept, { secret: "7K3M9QXY" }),
         enabled,
       ),
     ).rejects.toThrow(LINK_SECRET_MISMATCH);

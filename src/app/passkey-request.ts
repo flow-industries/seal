@@ -94,7 +94,7 @@ export async function passkeyRecipient(
     ...(label && { label }),
   });
 }
-/** When it was added and the first digits its approver typed, so a phished one can't pass as the owner's. */
+/** When it was added and the first four symbols of the code its approver typed, so a phished one can't pass as the owner's. */
 export const enrolledLabel = (pairing: string, added: Date) =>
   `Passkey ${pairing.slice(0, 4)}, added ${added.toISOString().slice(0, 10)}`;
 /** The public half of the admin keys this passkey's PRF derives; the caller wipes `prf`. */
