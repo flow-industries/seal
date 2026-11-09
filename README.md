@@ -29,8 +29,8 @@ const options = {
 await linkDevice(seed, {
   ...options,
   label: "Laptop",
-  onPrompt({ verificationUri, userCode, pairingCode }) {
-    // Show the link and the pairing code. The person types the code in the approving browser.
+  onPrompt({ linkPage, userCode, pairingCode }) {
+    // Open or show linkPage, built here from NOTE's origin and the user code. The person types pairingCode there.
   },
 });
 
@@ -88,7 +88,7 @@ For example, `import { createSession } from "@flow-industries/seal/internal/vaul
 - **Encryption.** Each item is sealed under the vault key with XChaCha20-Poly1305, bound to its account, vault, epoch, id and revision. The container encrypts each publication with AES-256-GCM in whole 4 MiB chunks, so a PDS reader sees when the vault changed and its size class, not its contents.
 - **Access.** The vault key sits in fixed access slots sealed to each recipient: a passkey (through its PRF), a linked device or agent seed, or a recovery file. Only an admin, a passkey or the recovery file, can sign a statement that changes who has access.
 - **Pins.** Every client pins the admin set it last accepted and refuses any statement that set didn't sign. A linked device never trusts on first use: it starts from the pin its approving admin sealed to it, under a key derived from the pairing code.
-- **Linking.** The device sends Flow ID only its public keys, an Argon2id commitment to a fresh pairing code of eight Crockford base32 characters (shown as `XXXX XXXX`, and never one a Flow ID user code types as, since Flow ID issues those), and a signature proving it holds its key. Flow ID never sees the code. The device refuses a link that takes longer than ten minutes on its own clock.
+- **Linking.** The device sends Flow ID only its public keys, an Argon2id commitment to a fresh pairing code of eight Crockford base32 characters (shown as `XXXX XXXX`, and never one a Flow ID user code types as, since Flow ID issues those), and a signature proving it holds its key. Flow ID never sees the code. The device refuses a link that takes longer than ten minutes on its own clock, and builds NOTE's link page itself from the user code rather than open an address Flow ID chose. A passkey's pairing code is likewise never shaped like a user code.
 - **Authorship.** Every revision is signed by whoever wrote it. Code in a note runs only when an admin the session trusts signed its exact revision. A write never signs code it didn't type: moving, trashing or merging another admin's code writes it unsigned and reports a `TrustLoss`.
 - **Custody.** A device seed and its Flow ID tokens are bearer secrets. Keep them outside the vault folder, in the OS keychain or Electron `safeStorage`.
 - **Limit.** Authenticated encryption proves integrity, not freshness. A fresh device can't tell a replay of an older authenticated state within the same epoch.
@@ -104,7 +104,7 @@ Production vaults depend on these bytes, so they never change in place:
 
 A new format gets a new version, and its reader ships before any writer. `tests/note-written-vault.test.ts` opens a vault written by NOTE's own code before this package existed, and the container and unlock tests carry further golden vectors. A change that breaks any of them is a format change, never a test to update.
 
-The link code (the device secret and the passkey pairing code, with their goldens in the same files) is not a vault format: no vault stores it, and a handoff sealed under it is read only within its link's ten-minute window. Its format may change only in a new minor version that says so, as 0.2.0 did when it went from twelve digits to eight symbols. Outside such a version, a broken link-code golden means the change is wrong, like any other.
+The link code (the device secret and the passkey pairing code, with their goldens in the same files) is not a vault format: no vault stores it, and a handoff sealed under it is read only within its link's ten-minute window. Its format may change only in a new minor version that says so, as 0.2.0 did when it went from twelve digits to eight symbols, and 0.3.0 when it kept passkey pairing codes out of a user code's shape. Outside such a version, a broken link-code golden means the change is wrong, like any other.
 
 ## Development
 

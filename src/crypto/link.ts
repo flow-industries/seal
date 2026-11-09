@@ -63,22 +63,40 @@ export function codeSymbols(bytes: Uint8Array): string {
 }
 
 /**
+ * Whether `code` can be a device secret or a pairing code: eight canonical
+ * symbols that no Flow ID user code types as. Flow ID issues the user code,
+ * so a code shaped like one is a code it may know, and could commit its own
+ * keys to or grind a passkey toward.
+ */
+export const isLinkSecret = (code: string) =>
+  LINK_SECRET.test(code) && !TYPED_USER_CODE.test(code);
+
+/**
  * The code a linking device shows and the approving browser makes the user
  * type. It commits to both public keys, so a key swapped between the device
  * and the browser shows a different code; its 40 bits make grinding a
- * matching key within the code's ten minutes costly.
+ * matching key within the code's ten minutes costly. It is the first of the
+ * digest's six 5-byte windows that `isLinkSecret` accepts, and the digest is
+ * hashed again if none is, so it never reads as a Flow ID user code and every
+ * key pair still has one.
  */
 export async function pairingCode(
   boxPublicKey: string,
   signPublicKey: string,
 ): Promise<string> {
   await sodium.ready;
-  const digest = await sha256(
+  let digest = await sha256(
     encoder.encode("flow-note/v3/pairing"),
     decode(boxPublicKey),
     decode(signPublicKey),
   );
-  return codeSymbols(digest.subarray(0, 5));
+  for (;;) {
+    for (let offset = 0; offset + 5 <= digest.length; offset += 5) {
+      const code = codeSymbols(digest.subarray(offset, offset + 5));
+      if (isLinkSecret(code)) return code;
+    }
+    digest = await sha256(digest);
+  }
 }
 /** A code as shown: `XXXX XXXX`, spaced rather than hyphenated so it never reads as a Flow ID user code. */
 export const formatPairingCode = (code: string) =>
@@ -94,16 +112,6 @@ export const typedPairingCode = (input: string) =>
     .replace(/O/g, "0")
     .replace(/[IL]/g, "1")
     .replace(/[^0-9A-Z]/g, "");
-
-/**
- * Whether `code` can be a device secret: eight canonical symbols that no Flow
- * ID user code types as. Flow ID issues the user code, so a secret shaped like
- * one is a secret it may know, and could commit its own keys to. Only for
- * device secrets: a passkey pairing code is a digest, so about one in 43 takes
- * that shape; compare a typed one to `pairingCode` exactly instead.
- */
-export const isLinkSecret = (code: string) =>
-  LINK_SECRET.test(code) && !TYPED_USER_CODE.test(code);
 
 /**
  * The device secret a linking device shows and the user types into the

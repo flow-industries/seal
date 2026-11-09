@@ -984,8 +984,9 @@ function stalling(
   token: () => Response | Promise<Response>,
   records: () => VaultRecordV2 | null | Promise<VaultRecordV2 | null> = () =>
     null,
-  userCode = "BCDF-GHJK",
+  authorize: { userCode?: string; verificationUri?: string } = {},
 ) {
+  const userCode = authorize.userCode ?? "BCDF-GHJK";
   const authorized: Record<string, string>[] = [];
   const calls = { token: 0, records: 0 };
   async function fetch(url: string, init: RequestInit): Promise<Response> {
@@ -995,7 +996,9 @@ function stalling(
       return Response.json({
         deviceCode: "fndc_window",
         userCode,
-        verificationUri: `https://note.example/link?code=${userCode}`,
+        verificationUri:
+          authorize.verificationUri ??
+          `https://note.example/link?code=${userCode}`,
         interval: 1,
         expiresIn,
       });
@@ -1127,7 +1130,7 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
 
   test("a user code Flow ID makes outside the user-code alphabet is refused before the secret is shown", async () => {
     for (const userCode of ["7K3M-9QXZ", "7K3M9QXZ", "BCDF-GHJ"]) {
-      const flowId = stalling(600, issued, undefined, userCode);
+      const flowId = stalling(600, issued, undefined, { userCode });
       const { prompts, outcome } = attempt(createDeviceSeed(), flowId);
       expect(await outcome).toEqual({
         checkpoint: null,
@@ -1136,6 +1139,50 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
       expect(prompts).toEqual([]);
       expect(flowId.calls.token).toBe(0);
     }
+  });
+
+  test("the link page is NOTE's, built from the user code, whatever verification address Flow ID returns", async () => {
+    /** The prompt a link shows when Flow ID answers with `verificationUri`; the link stops there. */
+    async function promptFor(verificationUri?: string, noteOrigin?: string) {
+      const stop = new AbortController();
+      const prompts: LinkPrompt[] = [];
+      await linkDevice(createDeviceSeed(), {
+        host,
+        label: "Laptop",
+        credentials: memory<NoteDeviceCredentials>(),
+        checkpoints: memory(),
+        fetch: stalling(600, pending, undefined, {
+          userCode: "bcdf ghjk",
+          verificationUri,
+        }).fetch,
+        noteOrigin,
+        signal: stop.signal,
+        onPrompt: (prompt) => {
+          prompts.push(prompt);
+          stop.abort();
+        },
+      }).catch(() => {});
+      expect(prompts).toHaveLength(1);
+      return prompts[0];
+    }
+    for (const verificationUri of [
+      "https://note.flow.talk/link#passkey=eyJyZXF1ZXN0Ijp0cnVlfQ",
+      "https://note.flow.talk/link?code=BCDF-GHJK&passkey=1",
+      "https://note.flow.talk/link?code=MPZX-MWBM",
+      "https://note.flow.talk/recover",
+      "https://note.flow.talk.example/link?code=BCDF-GHJK",
+      "https://evil.example/link?code=BCDF-GHJK",
+    ]) {
+      const prompt = await promptFor(verificationUri);
+      expect(prompt).not.toHaveProperty("verificationUri");
+      expect(prompt?.userCode).toBe("BCDF-GHJK");
+      expect(prompt?.linkPage).toBe(
+        "https://note.flow.talk/link?code=BCDF-GHJK",
+      );
+    }
+    expect((await promptFor(undefined, "https://note.example"))?.linkPage).toBe(
+      "https://note.example/link?code=BCDF-GHJK",
+    );
   });
 
   test("a Flow ID that stalls the token past the device's ten minutes gets no link, whatever it serves later", async () => {
