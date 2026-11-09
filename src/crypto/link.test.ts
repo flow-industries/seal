@@ -32,6 +32,24 @@ const checkpoint = {
   trust: "handed",
 } satisfies LinkedCheckpoint;
 
+async function pairingDigest(keys: {
+  boxPublicKey: string;
+  signPublicKey?: string;
+}) {
+  const bytes = (value: string) =>
+    sodium.from_base64(value, sodium.base64_variants.URLSAFE_NO_PADDING);
+  return new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new Uint8Array([
+        ...new TextEncoder().encode("flow-note/v3/pairing"),
+        ...bytes(keys.boxPublicKey),
+        ...bytes(keys.signPublicKey ?? ""),
+      ]),
+    ),
+  );
+}
+
 describe("pairing code", () => {
   test("is eight symbols fixed by both keys", async () => {
     const device = await createSeedRecipient(seed, "device");
@@ -60,27 +78,100 @@ describe("pairing code", () => {
       code,
     );
   });
-  test("is the first five digest bytes in Crockford base32", async () => {
+  test("is the digest's first five bytes when they aren't shaped like a user code", async () => {
     const device = await createSeedRecipient(seed, "device");
-    const digest = new Uint8Array(
-      await crypto.subtle.digest(
-        "SHA-256",
-        new Uint8Array([
-          ...new TextEncoder().encode("flow-note/v3/pairing"),
-          ...sodium.from_base64(
-            device.boxPublicKey,
-            sodium.base64_variants.URLSAFE_NO_PADDING,
-          ),
-          ...sodium.from_base64(
-            device.signPublicKey ?? "",
-            sodium.base64_variants.URLSAFE_NO_PADDING,
-          ),
-        ]),
-      ),
-    );
+    const first = codeSymbols((await pairingDigest(device)).subarray(0, 5));
+    expect(isLinkSecret(first)).toBe(true);
     expect(
       await pairingCode(device.boxPublicKey, device.signPublicKey ?? ""),
-    ).toBe(codeSymbols(digest.subarray(0, 5)));
+    ).toBe(first);
+  });
+  test("skips a window shaped like a user code to the next one, as for the first such seed", async () => {
+    const device = await createSeedRecipient(
+      new Uint8Array(32).fill(25),
+      "device",
+    );
+    expect([device.boxPublicKey, device.signPublicKey]).toEqual([
+      "d6GM0qbVrRX4SEUgdHQM_5bdcfQV0oWWMjYurueIYH8",
+      "P25BHet8AnZ4SkPrK52XCdM8Vz3BTrhWV4gxa53o1QA",
+    ]);
+    const digest = await pairingDigest(device);
+    expect(codeSymbols(digest.subarray(0, 5))).toBe("KSPFPSJX");
+    expect(isLinkSecret("KSPFPSJX")).toBe(false);
+    expect(codeSymbols(digest.subarray(5, 10))).toBe("69BTKR98");
+    expect(
+      await pairingCode(device.boxPublicKey, device.signPublicKey ?? ""),
+    ).toBe("69BTKR98");
+  });
+  test("hashes the digest again when all six windows are shaped like user codes", async () => {
+    const device = await createSeedRecipient(seed, "device");
+    const userCodeDigest = new Uint8Array(32);
+    for (let offset = 0; offset < 30; offset += 5)
+      userCodeDigest.set([0x5b, 0x1a, 0xf8, 0x46, 0x53], offset);
+    const real = crypto.subtle.digest.bind(crypto.subtle);
+    const again = new Uint8Array(await real("SHA-256", userCodeDigest));
+    const expected = [0, 5, 10, 15, 20, 25]
+      .map((offset) => codeSymbols(again.subarray(offset, offset + 5)))
+      .find(isLinkSecret);
+    expect(expected).toBe("S59EPF6V");
+    let calls = 0;
+    const digest = spyOn(crypto.subtle, "digest").mockImplementation(
+      (algorithm, data) => {
+        calls++;
+        return calls === 1
+          ? Promise.resolve(userCodeDigest.slice().buffer)
+          : real(algorithm, data);
+      },
+    );
+    try {
+      expect(
+        await pairingCode(device.boxPublicKey, device.signPublicKey ?? ""),
+      ).toBe(expected ?? "");
+      expect(calls).toBe(2);
+    } finally {
+      digest.mockRestore();
+    }
+  });
+  test("tries all six windows before hashing again", async () => {
+    const device = await createSeedRecipient(seed, "device");
+    const sixthWindowOnly = new Uint8Array(32);
+    for (let offset = 0; offset < 25; offset += 5)
+      sixthWindowOnly.set([0x5b, 0x1a, 0xf8, 0x46, 0x53], offset);
+    sixthWindowOnly.set([0x3c, 0xc7, 0x44, 0xdf, 0xbf], 25);
+    const real = crypto.subtle.digest.bind(crypto.subtle);
+    let calls = 0;
+    const digest = spyOn(crypto.subtle, "digest").mockImplementation(
+      (algorithm, data) => {
+        calls++;
+        return calls === 1
+          ? Promise.resolve(sixthWindowOnly.slice().buffer)
+          : real(algorithm, data);
+      },
+    );
+    try {
+      expect(
+        await pairingCode(device.boxPublicKey, device.signPublicKey ?? ""),
+      ).toBe("7K3M9QXZ");
+      expect(calls).toBe(1);
+    } finally {
+      digest.mockRestore();
+    }
+  });
+  test("is never shaped like a user code, whatever the keys", async () => {
+    const encode = (bytes: Uint8Array) =>
+      sodium.to_base64(bytes, sodium.base64_variants.URLSAFE_NO_PADDING);
+    let skipped = 0;
+    for (let draw = 0; draw < 3000; draw++) {
+      const keys = {
+        boxPublicKey: encode(crypto.getRandomValues(new Uint8Array(32))),
+        signPublicKey: encode(crypto.getRandomValues(new Uint8Array(32))),
+      };
+      const code = await pairingCode(keys.boxPublicKey, keys.signPublicKey);
+      expect(isLinkSecret(code)).toBe(true);
+      if (code !== codeSymbols((await pairingDigest(keys)).subarray(0, 5)))
+        skipped++;
+    }
+    expect(skipped).toBeGreaterThan(0);
   });
   test("shows as two groups of four, apart by a space", () => {
     expect(formatPairingCode("7K3M9QXZ")).toBe("7K3M 9QXZ");

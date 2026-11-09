@@ -67,6 +67,7 @@ import {
   type DeviceVault,
   deleteDeviceStorage,
   handedCheckpoint,
+  INVALID_NOTE_ORIGIN,
   LINK_EXPIRED,
   LINK_UNVERIFIED,
   LINK_WINDOW_MS,
@@ -984,8 +985,9 @@ function stalling(
   token: () => Response | Promise<Response>,
   records: () => VaultRecordV2 | null | Promise<VaultRecordV2 | null> = () =>
     null,
-  userCode = "BCDF-GHJK",
+  authorize: { userCode?: string; verificationUri?: string } = {},
 ) {
+  const userCode = authorize.userCode ?? "BCDF-GHJK";
   const authorized: Record<string, string>[] = [];
   const calls = { token: 0, records: 0 };
   async function fetch(url: string, init: RequestInit): Promise<Response> {
@@ -995,7 +997,9 @@ function stalling(
       return Response.json({
         deviceCode: "fndc_window",
         userCode,
-        verificationUri: `https://note.example/link?code=${userCode}`,
+        verificationUri:
+          authorize.verificationUri ??
+          `https://note.example/link?code=${userCode}`,
         interval: 1,
         expiresIn,
       });
@@ -1052,6 +1056,34 @@ function attempt(
     (error: Error) => ({ checkpoint: null, error: error.message }),
   );
   return { prompts, removals, credentials, checkpoints, outcome };
+}
+/** Runs a link to its prompt, then stops it there, with Flow ID answering `authorize` as told. */
+async function promptFor(
+  options: { verificationUri?: string; noteOrigin?: string } = {},
+) {
+  const stop = new AbortController();
+  const prompts: LinkPrompt[] = [];
+  const flowId = stalling(600, pending, undefined, {
+    userCode: "bcdf ghjk",
+    verificationUri: options.verificationUri,
+  });
+  const error = await linkDevice(createDeviceSeed(), {
+    host,
+    label: "Laptop",
+    credentials: memory<NoteDeviceCredentials>(),
+    checkpoints: memory(),
+    fetch: flowId.fetch,
+    noteOrigin: options.noteOrigin,
+    signal: stop.signal,
+    onPrompt: (prompt) => {
+      prompts.push(prompt);
+      stop.abort();
+    },
+  }).then(
+    () => null,
+    (reason: Error) => reason.message,
+  );
+  return { prompts, error, authorized: flowId.authorized };
 }
 /** The device's window runs on `performance.now()`; these tests move it, and the wall clock with it. */
 let skew = 0;
@@ -1127,7 +1159,7 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
 
   test("a user code Flow ID makes outside the user-code alphabet is refused before the secret is shown", async () => {
     for (const userCode of ["7K3M-9QXZ", "7K3M9QXZ", "BCDF-GHJ"]) {
-      const flowId = stalling(600, issued, undefined, userCode);
+      const flowId = stalling(600, issued, undefined, { userCode });
       const { prompts, outcome } = attempt(createDeviceSeed(), flowId);
       expect(await outcome).toEqual({
         checkpoint: null,
@@ -1135,6 +1167,59 @@ describe("the device keeps its own ten minutes, and no search carries over", () 
       });
       expect(prompts).toEqual([]);
       expect(flowId.calls.token).toBe(0);
+    }
+  });
+
+  test("the link page is NOTE's, built from the user code, whatever verification address Flow ID returns", async () => {
+    for (const verificationUri of [
+      "https://note.flow.talk/link#passkey=eyJyZXF1ZXN0Ijp0cnVlfQ",
+      "https://note.flow.talk/link?code=BCDF-GHJK&passkey=1",
+      "https://note.flow.talk/link?code=MPZX-MWBM",
+      "https://note.flow.talk/recover",
+      "https://note.flow.talk.example/link?code=BCDF-GHJK",
+      "https://evil.example/link?code=BCDF-GHJK",
+    ]) {
+      const { prompts } = await promptFor({ verificationUri });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).not.toHaveProperty("verificationUri");
+      expect(prompts[0]?.userCode).toBe("BCDF-GHJK");
+      expect(prompts[0]?.linkPage).toBe(
+        "https://note.flow.talk/link?code=BCDF-GHJK",
+      );
+    }
+  });
+
+  test("a NOTE origin is https, or http on loopback, and is checked before Flow ID hears of the device", async () => {
+    for (const [noteOrigin, linkPage] of [
+      ["https://note.example", "https://note.example/link?code=BCDF-GHJK"],
+      ["https://note.example/", "https://note.example/link?code=BCDF-GHJK"],
+      [
+        "https://NOTE.example:8443",
+        "https://note.example:8443/link?code=BCDF-GHJK",
+      ],
+      ["http://localhost:3000", "http://localhost:3000/link?code=BCDF-GHJK"],
+      ["http://127.0.0.1:5173", "http://127.0.0.1:5173/link?code=BCDF-GHJK"],
+      ["http://[::1]:8080", "http://[::1]:8080/link?code=BCDF-GHJK"],
+    ]) {
+      const { prompts } = await promptFor({ noteOrigin });
+      expect(prompts.map((prompt) => prompt.linkPage)).toEqual([linkPage]);
+    }
+    for (const noteOrigin of [
+      "note.flow.talk",
+      "http://note.flow.talk",
+      "http://192.168.1.2:3000",
+      "file:///tmp/note",
+      "ftp://note.flow.talk",
+      "https://someone@note.flow.talk",
+      "https://someone:secret@note.flow.talk",
+      "https://note.flow.talk/link",
+      "https://note.flow.talk/?code=MPZX-MWBM",
+      "https://note.flow.talk/#passkey=x",
+    ]) {
+      const { prompts, error, authorized } = await promptFor({ noteOrigin });
+      expect([noteOrigin, error]).toEqual([noteOrigin, INVALID_NOTE_ORIGIN]);
+      expect(prompts).toEqual([]);
+      expect(authorized).toEqual([]);
     }
   });
 

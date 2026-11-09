@@ -41,6 +41,7 @@ export {
   type DeviceVault,
   deleteDeviceStorage,
   handedCheckpoint,
+  INVALID_NOTE_ORIGIN,
   LINK_EXPIRED,
   LINK_UNVERIFIED,
   LINK_WINDOW_MS,

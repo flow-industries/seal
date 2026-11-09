@@ -97,8 +97,14 @@ export interface DeviceOptions {
 }
 /** What the device shows while the user approves it in a browser. */
 export interface LinkPrompt {
+  /** Flow ID's user code, as `XXXX-XXXX`. */
   userCode: string;
-  verificationUri: string;
+  /**
+   * NOTE's link page for this request, `<noteOrigin>/link?code=<userCode>`,
+   * built on this device. Flow ID's own verification address is never passed
+   * on, so it can't send the person to a page or a request of its choosing.
+   */
+  linkPage: string;
   /**
    * The device secret the user types on the link page. Show it, never send
    * it anywhere: Flow ID holds only a slow hash of it, so it can't vouch for
@@ -111,6 +117,14 @@ export interface LinkOptions extends DeviceOptions {
   label: string;
   kind?: NoteDeviceKind;
   onPrompt(prompt: LinkPrompt): void;
+  /**
+   * The NOTE origin whose link page approves this device;
+   * `https://note.flow.talk` unless set. It must be `https:`, or `http:` on
+   * `localhost`, `127.0.0.1` or `[::1]`, with no credentials, path, query or
+   * fragment; anything else is refused with `INVALID_NOTE_ORIGIN` before
+   * Flow ID hears of the device.
+   */
+  noteOrigin?: string;
   signal?: AbortSignal;
   /** How long to wait for the approving tab's change once Flow ID has issued the token; at most `PUBLISH_WAIT_MS`. */
   publishTimeoutMs?: number;
@@ -262,6 +276,32 @@ export class NoteChangedError extends Error {
   constructor() {
     super("This note changed. Read it again.");
   }
+}
+const NOTE_ORIGIN = "https://note.flow.talk";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+export const INVALID_NOTE_ORIGIN =
+  "NOTE's address must be an https origin, or http on this machine.";
+/** `noteOrigin` as `LinkOptions.noteOrigin` requires it, or `INVALID_NOTE_ORIGIN`. */
+function linkOrigin(noteOrigin: string): string {
+  let url: URL;
+  try {
+    url = new URL(noteOrigin);
+  } catch {
+    throw new Error(INVALID_NOTE_ORIGIN);
+  }
+  const scheme =
+    url.protocol === "https:" ||
+    (url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname));
+  if (
+    !scheme ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(INVALID_NOTE_ORIGIN);
+  return url.origin;
 }
 export const LINK_UNVERIFIED =
   "This device's link couldn't be verified. Link it again.";
@@ -487,7 +527,8 @@ async function tokensBy(
  * that secret to this seed. Saves the device's credentials and checkpoint.
  * A user code outside Flow ID's user-code alphabet is refused with
  * `LINK_UNVERIFIED` before the secret is shown, since it could be a secret
- * Flow ID committed its own keys to.
+ * Flow ID committed its own keys to. The link page is built here from
+ * `noteOrigin` and the user code; Flow ID's verification address is ignored.
  * The whole link runs on this device's clock: a code Flow ID says lasts
  * longer than `LINK_WINDOW_MS` is refused before the secret is shown, and no
  * token or handoff is taken once that window (plus up to `PUBLISH_WAIT_MS`
@@ -499,6 +540,7 @@ export async function linkDevice(
   seed: Uint8Array,
   options: LinkOptions,
 ): Promise<DeviceCheckpoint> {
+  const noteOrigin = linkOrigin(options.noteOrigin ?? NOTE_ORIGIN);
   const elapsed = stopwatch();
   const secret = createLinkSecret();
   const transportOptions = options.fetch ? { fetch: options.fetch } : {};
@@ -515,11 +557,14 @@ export async function linkDevice(
   if (authorization.expiresIn * 1000 > LINK_WINDOW_MS)
     throw new Error(LINK_EXPIRED);
   // Flow ID picks the user code; one outside the user-code alphabet could be a secret it committed its own keys to, waiting to be typed.
-  if (!normalizeUserCode(authorization.userCode))
-    throw new Error(LINK_UNVERIFIED);
+  const code = normalizeUserCode(authorization.userCode);
+  if (!code) throw new Error(LINK_UNVERIFIED);
+  const userCode = `${code.slice(0, 4)}-${code.slice(4)}`;
+  const linkPage = new URL("/link", noteOrigin);
+  linkPage.searchParams.set("code", userCode);
   options.onPrompt({
-    userCode: authorization.userCode,
-    verificationUri: authorization.verificationUri,
+    userCode,
+    linkPage: linkPage.href,
     pairingCode: formatPairingCode(secret),
     expiresIn: authorization.expiresIn,
   });
