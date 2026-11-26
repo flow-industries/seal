@@ -30,9 +30,16 @@ import {
 export const SYNC_INTERVAL_MS = 30_000;
 /** The wait after each consecutive refusal; the last one repeats. */
 export const SYNC_BACKOFF_MS = [60_000, 120_000, 300_000, 900_000, 1_800_000];
-/** How long a busy refusal waits: what Flow ID asked for, held to 1–60 s, or 5 s when it didn't say. */
+/**
+ * How long sync waits after Flow ID answers that too many uploads are in
+ * flight: its `Retry-After`, kept within a second and a minute, or 5 seconds
+ * when it gave none. A busy answer clears as soon as an upload ends, so it
+ * never climbs `SYNC_BACKOFF_MS`.
+ */
 export function busyRetryMs(retryAfter: number | undefined): number {
-  return Math.min(Math.max(retryAfter ?? 5, 1), 60) * 1000;
+  const seconds =
+    retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 5;
+  return Math.min(60, Math.max(1, seconds)) * 1000;
 }
 
 const refusals = new Map<SyncResult["blocked"], SyncRefusal>([
@@ -44,7 +51,6 @@ const refusals = new Map<SyncResult["blocked"], SyncRefusal>([
 function syncStatus(blocked: SyncResult["blocked"], pending: number) {
   if (blocked === "consent") return SYNC_AUTHORIZATION_REQUIRED;
   if (blocked === "connection") return SYNC_UNREACHABLE;
-  if (blocked === "busy") return SYNC_BUSY;
   if (blocked) return SYNC_BLOCKED;
   return pending ? SYNC_PENDING : SYNCED;
 }
@@ -55,9 +61,9 @@ function syncStatus(blocked: SyncResult["blocked"], pending: number) {
  * After access loss the key is wiped within `flushLimit` ms, saved or not.
  * A quota, rate-limit or size refusal stops automatic syncs, and so every upload,
  * for `SYNC_BACKOFF_MS`; `sync()` and a local edit after the wait end it early,
- * and a delete ends a size refusal's wait at once. A busy refusal only waits
- * `busyRetryMs` before one more sync, and never climbs that ladder; a lost
- * connection retries on the usual cadence.
+ * and a delete ends a size refusal's wait at once. A busy Flow ID gets one
+ * retry after `busyRetryMs`, and automatic syncs wait for it; a lost
+ * connection retries on the normal cadence.
  */
 export function synchronizedRuntime(
   session: VaultSession,
@@ -103,6 +109,14 @@ export function synchronizedRuntime(
     const result = await engine.sync();
     const report = { read: result.read };
     if (stopped) return report;
+    if (result.blocked === "busy") {
+      busyRetry = setTimeout(() => {
+        busyRetry = undefined;
+        void synchronize();
+      }, busyRetryMs(result.retryAfter));
+      publish(SYNC_BUSY);
+      return report;
+    }
     const refusal = refusals.get(result.blocked);
     if (refusal) {
       const step = backoff
@@ -119,11 +133,6 @@ export function synchronizedRuntime(
       return report;
     }
     if (!result.blocked) backoff = null;
-    if (result.blocked === "busy")
-      busyRetry = setTimeout(
-        () => void synchronize(),
-        busyRetryMs(result.retryAfter),
-      );
     const pending = await session.database.outbox.count();
     publish(syncStatus(result.blocked, pending));
     return report;
@@ -132,6 +141,7 @@ export function synchronizedRuntime(
     if (stopped) return Promise.resolve({ read: false });
     if (running) return running;
     clearTimeout(busyRetry);
+    busyRetry = undefined;
     running = coordinate()
       .catch(async (error) => {
         if (error instanceof VaultAccessError) await lockOut();
@@ -144,6 +154,7 @@ export function synchronizedRuntime(
     return running;
   }
   function synchronizeWhenDue() {
+    if (busyRetry !== undefined) return;
     if (backoff && Date.now() < backoff.until) publish(backoff.status);
     else void synchronize();
   }

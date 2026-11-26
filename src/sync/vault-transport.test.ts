@@ -36,8 +36,8 @@ import {
 } from "./vault-snapshot.ts";
 import {
   AuthVaultTransport,
-  failureReason,
   staysJournal,
+  transientFailure,
   type VaultRecordV2,
   type VaultTransportRpc,
   vaultBlobSchema,
@@ -428,12 +428,14 @@ describe("through the device transport", () => {
       () => Promise.reject(new TypeError("Failed to fetch")),
       "connection",
       undefined,
+      "connection",
     ],
     [
       "a stalled upload",
       () => Response.json({ code: "UPLOAD_INCOMPLETE" }, { status: 408 }),
       "connection",
       undefined,
+      "connection",
     ],
     [
       "too many uploads, wait 7 s",
@@ -444,26 +446,29 @@ describe("through the device transport", () => {
         ),
       "busy",
       7,
+      "busy",
     ],
     [
       "too many uploads, no wait given",
       () => Response.json({ code: "UPLOAD_BUSY" }, { status: 429 }),
       "busy",
       undefined,
+      "busy",
     ],
     [
-      "a rate limit, whatever wait it gives",
+      "a rate limit",
       () =>
         Response.json(
           { code: "RATE_LIMITED" },
           { status: 429, headers: { "Retry-After": "30" } },
         ),
       "rate-limited",
+      30,
       undefined,
     ],
   ] as const)(
-    "%s is a %s sync failure, with Flow ID's wait only when busy",
-    async (_, answer, reason, retryAfter) => {
+    "%s is a %s sync failure carrying Flow ID's wait, and transient only when no answer came or Flow ID was busy",
+    async (_, answer, reason, retryAfter, transient) => {
       const f = await fixture();
       const device = createNoteDeviceTransport("https://id.test", credentials, {
         fetch: async () => answer(),
@@ -477,7 +482,7 @@ describe("through the device transport", () => {
         .catch((error) => error);
       expect(failure).toBeInstanceOf(SyncFailure);
       expect(failure).toMatchObject({ reason, retryAfter });
-      expect(failureReason(failure)).toBe(reason);
+      expect(transientFailure(failure)).toBe(transient);
       expect(f.puts).toBe(0);
       adapter.stop();
       f.key.fill(0);
@@ -489,13 +494,16 @@ test.each([
   [new NoteTransportError("CONNECTION_LOST", 0), "connection"],
   [new NoteTransportError("UPLOAD_INCOMPLETE", 408), "connection"],
   [new NoteTransportError("UPLOAD_BUSY", 429, 7), "busy"],
-  [{ code: "QUOTA", status: 413 }, "quota"],
-  [new SyncFailure("too-large", "Notepad too large to sync"), "too-large"],
+  [new SyncFailure("busy", "Encrypted sync unavailable"), "busy"],
+  [new SyncFailure("connection", "Encrypted sync unavailable"), "connection"],
+  [new NoteTransportError("RATE_LIMITED", 429, 30), undefined],
+  [{ code: "QUOTA", status: 413 }, undefined],
+  [new SyncFailure("offline", "Encrypted sync unavailable"), undefined],
   [new NoteTransportError("DEVICE_LINKING_DISABLED", 403), undefined],
   [new Error("CONNECTION_LOST"), undefined],
   [null, undefined],
-] as const)("failureReason reads %p as %p", (error, reason) => {
-  expect(failureReason(error)).toBe(reason);
+] as const)("transientFailure reads %p as %p", (error, transient) => {
+  expect(transientFailure(error)).toBe(transient);
 });
 
 test.each([

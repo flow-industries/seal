@@ -10,7 +10,6 @@ import {
 export interface SyncResult {
   synced: number;
   blocked?: SyncFailure["reason"];
-  /** Seconds Flow ID asked to wait before retrying a `busy` refusal, when it said. */
   retryAfter?: number;
   /** This sync read the vault from the PDS and applied it, so the session now reflects it. */
   read: boolean;

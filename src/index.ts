@@ -55,8 +55,7 @@ export {
   PUBLISH_WAIT_MS,
   type WriteOptions,
 } from "./device/client.ts";
-export type { SyncFailureReason } from "./sync/records.ts";
-export { failureReason } from "./sync/vault-transport.ts";
+export { transientFailure } from "./sync/vault-transport.ts";
 export type {
   MoveOptions,
   RevisionBase,

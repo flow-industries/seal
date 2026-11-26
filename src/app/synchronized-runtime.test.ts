@@ -483,6 +483,12 @@ function automaticSyncs(create: () => NoteRuntime) {
       });
     return published.shift();
   };
+  /** One automatic sync tick at `time`, without waiting for a status. */
+  const tick = (time: number) => {
+    setSystemTime(time);
+    // biome-ignore lint/plugin: TimerHandler is a browser union; the runtime registers a function.
+    if (typeof handler === "function") handler();
+  };
   return {
     runtime,
     next,
@@ -493,10 +499,9 @@ function automaticSyncs(create: () => NoteRuntime) {
       });
       await next();
     },
+    tick,
     async tickAt(time: number) {
-      setSystemTime(time);
-      // biome-ignore lint/plugin: TimerHandler is a browser union; the runtime registers a function.
-      if (typeof handler === "function") handler();
+      tick(time);
       return next();
     },
   };
@@ -803,6 +808,8 @@ for (const [reason, status] of [
 
 test.each([
   [undefined, 5_000],
+  [Number.NaN, 5_000],
+  [Number.POSITIVE_INFINITY, 5_000],
   [0, 1_000],
   [7, 7_000],
   [60, 60_000],
@@ -811,7 +818,7 @@ test.each([
   expect(busyRetryMs(retryAfter)).toBe(wait);
 });
 
-test("a busy refusal syncs again once Flow ID's wait passes, and never backs off", async () => {
+test("a busy refusal retries once after Flow ID's wait, which automatic syncs wait for and a manual sync or lock drops", async () => {
   const key = await createVaultKey();
   const session = createSession({
     owner: "did:plc:busy",
@@ -834,7 +841,7 @@ test("a busy refusal syncs again once Flow ID's wait passes, and never backs off
     },
   };
   const start = Date.now();
-  const { runtime, next, watch, tickAt } = automaticSyncs(() =>
+  const { runtime, next, watch, tick, tickAt } = automaticSyncs(() =>
     synchronizedRuntime(session, async () => transport),
   );
   const timers = spyOn(globalThis, "setTimeout");
@@ -857,10 +864,17 @@ test("a busy refusal syncs again once Flow ID's wait passes, and never backs off
     expect(uploads).toBe(1);
     expect(retries()).toHaveLength(1);
 
-    // Unlike a rate limit, the next tick uploads again, and its run drops the retry already waiting.
-    expect(await tickAt(start + SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
+    // Automatic syncs wait for the retry rather than adding uploads to a busy Flow ID.
+    tick(start + SYNC_INTERVAL_MS);
+    await localEditsSettle();
+    expect(uploads).toBe(1);
+
+    // A manual sync goes now, and drops the retry it overtook.
+    await runtime.sync?.();
+    expect(await next()).toBe(SYNC_BUSY);
     expect(uploads).toBe(2);
     expect(cleared(retries()[0]?.call)).toBe(true);
+    expect(retries()).toHaveLength(2);
 
     busy = false;
     const { retry } = retries()[1] ?? {};
@@ -870,10 +884,11 @@ test("a busy refusal syncs again once Flow ID's wait passes, and never backs off
     expect(uploads).toBe(3);
     expect(await session.database.outbox.count()).toBe(0);
 
-    // A lock drops a retry still waiting, so nothing outlives the vault.
+    // With the retry done, the normal cadence is back; and a lock drops a retry still waiting.
     busy = true;
     await runtime.save(pendingNote("again.md"));
     expect(await tickAt(start + 2 * SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
+    expect(uploads).toBe(4);
     const waiting = retries()[2]?.call;
     expect(waiting).toBeDefined();
     runtime.lock();

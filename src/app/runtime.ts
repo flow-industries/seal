@@ -122,15 +122,20 @@ export const SYNC_LOCKED = "Your notepad changed. Unlock again.";
 export const SYNCED = "Synced";
 export const SYNC_PENDING = "Saved locally · Sync pending";
 export const SYNC_BLOCKED = "Saved locally · Sync blocked";
-/** No complete answer came back from Flow ID; sync tries again on its usual cadence. */
-export const SYNC_UNREACHABLE = "Saved locally · Couldn’t reach Flow ID";
-/** Flow ID had too many uploads in flight; sync tries again within a minute. */
-export const SYNC_BUSY = "Saved locally · Syncing again in a moment";
 export const SYNC_QUOTA_REACHED = "Saved locally · PDS quota reached";
 export const SYNC_RATE_LIMITED = "Saved locally · PDS upload limit reached";
 export const SYNC_TOO_LARGE = "Saved locally · Notepad too large to sync";
 export const SYNC_AUTHORIZATION_REQUIRED =
   "Saved locally · Sync needs authorization";
+/** No complete answer came back from Flow ID; the cause may be on either side. Sync keeps its normal cadence. */
+export const SYNC_UNREACHABLE = "Saved locally · Couldn’t reach Flow ID";
+/** Flow ID has too many uploads in flight for this account; sync tries once more after its short wait. */
+export const SYNC_BUSY = "Saved locally · Syncing again in a moment";
+/** What an unlock or a link says after a `transientFailure`. The cause may be on either side, so neither blames the person's connection. */
+export const TRANSIENT_FAILURES = {
+  connection: "Couldn’t reach Flow ID. Try again in a moment.",
+  busy: "Flow ID is busy with other uploads from your account. Try again in a moment.",
+} as const;
 
 /** A refusal that sync waits out before trying on its own again. */
 export type SyncRefusal =

@@ -31,7 +31,7 @@ import {
   ROOT_BYTES,
   resealContainerRoot,
 } from "../crypto/container.ts";
-import { SyncFailure, type SyncFailureReason } from "./records.ts";
+import { SyncFailure } from "./records.ts";
 import {
   applyJournal,
   decodeJournal,
@@ -293,7 +293,7 @@ export interface VaultTransportOptions {
     cid: string;
   }) => Promise<void> | void;
 }
-const failureReasons = new Map<string, SyncFailureReason>([
+const failureReasons = new Map<string, SyncFailure["reason"]>([
   ["CONFLICT", "conflict"],
   ["QUOTA", "quota"],
   ["RATE_LIMITED", "rate-limited"],
@@ -304,22 +304,22 @@ const failureReasons = new Map<string, SyncFailureReason>([
   ["UPLOAD_INCOMPLETE", "connection"],
   ["UPLOAD_BUSY", "busy"],
 ]);
-const refusalSchema = z.object({
-  code: z.string(),
-  retryAfter: z.number().optional().catch(undefined),
-});
 /**
- * The sync reason behind a failed Flow ID call: a `SyncFailure`'s own, or
- * the one its refusal code stands for. Undefined for any other error, a
- * refusal whose code has no reason of its own included.
+ * `connection` or `busy` when `error`, an SDK transport error or a
+ * `SyncFailure`, says no answer came back or Flow ID was busy. Neither is a
+ * refusal, so the same request may pass later.
  */
-export function failureReason(
-  // biome-ignore lint/plugin: Whatever the call threw is sorted here.
+export function transientFailure(
+  // biome-ignore lint/plugin: Caught failures are classified here by code or reason.
   error: unknown,
-): SyncFailureReason | undefined {
-  if (error instanceof SyncFailure) return error.reason;
-  const refusal = refusalSchema.safeParse(error);
-  return refusal.success ? failureReasons.get(refusal.data.code) : undefined;
+): "connection" | "busy" | undefined {
+  const reason =
+    error instanceof SyncFailure
+      ? error.reason
+      : failureReasons.get(
+          z.object({ code: z.string() }).safeParse(error).data?.code ?? "",
+        );
+  return reason === "connection" || reason === "busy" ? reason : undefined;
 }
 export class AuthVaultTransport implements VaultSnapshotTransport {
   readonly version = 2;
@@ -378,34 +378,35 @@ export class AuthVaultTransport implements VaultSnapshotTransport {
     this.active();
     try {
       const value = await run();
-      const failure = refusalSchema.safeParse(value);
+      const failure = z.object({ code: z.string() }).safeParse(value);
       if (failure.success) throw failure.data;
       this.active();
       return value;
     } catch (error) {
-      const refusal = refusalSchema.safeParse(error);
+      const code = z.object({ code: z.string() }).safeParse(error);
       if (
         missing &&
-        refusal.success &&
+        code.success &&
         ["NOTE_NOT_FOUND", "NOT_FOUND", "RECORD_NOT_FOUND"].includes(
-          refusal.data.code,
+          code.data.code,
         )
       )
         return null;
-      if (!refusal.success) throw error;
-      const { code, retryAfter } = refusal.data;
+      if (!code.success) throw error;
       // Flow ID refuses a revoked device's refresh with INVALID_GRANT; retrying can't help.
-      if (code === "INVALID_RESPONSE" || code === "INVALID_GRANT") {
+      if (
+        code.data.code === "INVALID_RESPONSE" ||
+        code.data.code === "INVALID_GRANT"
+      ) {
         this.stop();
         throw new VaultAccessError(
           "Couldn’t verify your notepad. Unlock again.",
         );
       }
-      const reason = failureReasons.get(code) ?? "offline";
       throw new SyncFailure(
-        reason,
+        failureReasons.get(code.data.code) ?? "offline",
         "Encrypted sync unavailable",
-        reason === "busy" ? retryAfter : undefined,
+        z.object({ retryAfter: z.number() }).safeParse(error).data?.retryAfter,
       );
     }
   }
