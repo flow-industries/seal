@@ -876,20 +876,38 @@ test("a busy refusal retries once after Flow ID's wait, which automatic syncs wa
     expect(cleared(retries()[0]?.call)).toBe(true);
     expect(retries()).toHaveLength(2);
 
+    // A manual sync that overtakes the retry and goes through hands automatic syncs back their cadence.
     busy = false;
-    const { retry } = retries()[1] ?? {};
+    await runtime.sync?.();
+    expect(await next()).toBe(SYNCED);
+    expect(uploads).toBe(3);
+    expect(cleared(retries()[1]?.call)).toBe(true);
+    await runtime.save(pendingNote("after.md"));
+    expect(await tickAt(start + 2 * SYNC_INTERVAL_MS)).toBe(SYNCED);
+    expect(uploads).toBe(4);
+
+    // The retry itself syncs once Flow ID is free, and the cadence is back after it too.
+    busy = true;
+    await runtime.save(pendingNote("busy again.md"));
+    expect(await tickAt(start + 3 * SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
+    expect(uploads).toBe(5);
+    busy = false;
+    const { retry } = retries()[2] ?? {};
     // biome-ignore lint/plugin: TimerHandler is a browser union; the runtime registers a function.
     if (typeof retry === "function") retry();
     expect(await next()).toBe(SYNCED);
-    expect(uploads).toBe(3);
+    expect(uploads).toBe(6);
     expect(await session.database.outbox.count()).toBe(0);
+    await runtime.save(pendingNote("after the retry.md"));
+    expect(await tickAt(start + 4 * SYNC_INTERVAL_MS)).toBe(SYNCED);
+    expect(uploads).toBe(7);
 
-    // With the retry done, the normal cadence is back; and a lock drops a retry still waiting.
+    // A lock drops a retry still waiting.
     busy = true;
     await runtime.save(pendingNote("again.md"));
-    expect(await tickAt(start + 2 * SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
-    expect(uploads).toBe(4);
-    const waiting = retries()[2]?.call;
+    expect(await tickAt(start + 5 * SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
+    expect(uploads).toBe(8);
+    const waiting = retries()[3]?.call;
     expect(waiting).toBeDefined();
     runtime.lock();
     expect(cleared(waiting)).toBe(true);
