@@ -469,7 +469,7 @@ describe("through the device transport", () => {
         fetch: async () => answer(),
       });
       const adapter = new AuthVaultTransport(
-        { ...f.rpc, upload: (bytes) => device.upload(bytes) },
+        { ...f.rpc, upload: (bytes) => device.upload(new Uint8Array(bytes)) },
         { ...f, ...f.state },
       );
       const failure = await adapter
@@ -494,7 +494,7 @@ test.each([
   [new NoteTransportError("DEVICE_LINKING_DISABLED", 403), undefined],
   [new Error("CONNECTION_LOST"), undefined],
   [null, undefined],
-])("failureReason reads %p as %p", (error, reason) => {
+] as const)("failureReason reads %p as %p", (error, reason) => {
   expect(failureReason(error)).toBe(reason);
 });
 

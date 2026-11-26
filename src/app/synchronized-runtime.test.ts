@@ -841,12 +841,16 @@ test("a busy refusal syncs again once Flow ID's wait passes, and never backs off
   const clears = spyOn(globalThis, "clearTimeout");
   const retries = () =>
     timers.mock.calls.flatMap(([retry, delay], call) =>
-      delay === 7_000
-        ? [{ retry, handle: timers.mock.results[call]?.value }]
-        : [],
+      delay === 7_000 ? [{ retry, call }] : [],
+    );
+  /** Whether the timer `setTimeout` call number `call` made was cleared. */
+  const cleared = (call: number | undefined) =>
+    call !== undefined &&
+    clears.mock.calls.some(
+      ([handle]) => handle === timers.mock.results[call]?.value,
     );
   try {
-    await runtime.sync();
+    await runtime.sync?.();
     await watch();
     await runtime.save(pendingNote("busy.md"));
     expect(await tickAt(start)).toBe(SYNC_BUSY);
@@ -856,9 +860,7 @@ test("a busy refusal syncs again once Flow ID's wait passes, and never backs off
     // Unlike a rate limit, the next tick uploads again, and its run drops the retry already waiting.
     expect(await tickAt(start + SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
     expect(uploads).toBe(2);
-    expect(clears.mock.calls.map(([handle]) => handle)).toContain(
-      retries()[0]?.handle,
-    );
+    expect(cleared(retries()[0]?.call)).toBe(true);
 
     busy = false;
     const { retry } = retries()[1] ?? {};
@@ -872,10 +874,10 @@ test("a busy refusal syncs again once Flow ID's wait passes, and never backs off
     busy = true;
     await runtime.save(pendingNote("again.md"));
     expect(await tickAt(start + 2 * SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
-    const waiting = retries()[2]?.handle;
+    const waiting = retries()[2]?.call;
     expect(waiting).toBeDefined();
     runtime.lock();
-    expect(clears.mock.calls.map(([handle]) => handle)).toContain(waiting);
+    expect(cleared(waiting)).toBe(true);
   } finally {
     timers.mockRestore();
     clears.mockRestore();
