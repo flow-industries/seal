@@ -10,6 +10,8 @@ import {
   type NoteRuntime,
   SYNC_AUTHORIZATION_REQUIRED,
   SYNC_BLOCKED,
+  SYNC_BUSY,
+  SYNC_CONNECTION_FAILED,
   SYNC_LOCKED,
   SYNC_PENDING,
   SYNC_QUOTA_REACHED,
@@ -28,6 +30,17 @@ import {
 export const SYNC_INTERVAL_MS = 30_000;
 /** The wait after each consecutive refusal; the last one repeats. */
 export const SYNC_BACKOFF_MS = [60_000, 120_000, 300_000, 900_000, 1_800_000];
+/**
+ * How long sync waits after Flow ID answers that too many uploads are in
+ * flight: its `Retry-After`, kept within a second and a minute, or 5 seconds
+ * when it gave none. A busy answer clears as soon as an upload ends, so it
+ * never climbs `SYNC_BACKOFF_MS`.
+ */
+export function busyRetryMs(retryAfter: number | undefined): number {
+  const seconds =
+    retryAfter !== undefined && Number.isFinite(retryAfter) ? retryAfter : 5;
+  return Math.min(60, Math.max(1, seconds)) * 1000;
+}
 
 const refusals = new Map<SyncResult["blocked"], SyncRefusal>([
   ["quota", SYNC_QUOTA_REACHED],
@@ -37,6 +50,7 @@ const refusals = new Map<SyncResult["blocked"], SyncRefusal>([
 
 function syncStatus(blocked: SyncResult["blocked"], pending: number) {
   if (blocked === "consent") return SYNC_AUTHORIZATION_REQUIRED;
+  if (blocked === "connection") return SYNC_CONNECTION_FAILED;
   if (blocked) return SYNC_BLOCKED;
   return pending ? SYNC_PENDING : SYNCED;
 }
@@ -47,7 +61,10 @@ function syncStatus(blocked: SyncResult["blocked"], pending: number) {
  * After access loss the key is wiped within `flushLimit` ms, saved or not.
  * A quota, rate-limit or size refusal stops automatic syncs, and so every upload,
  * for `SYNC_BACKOFF_MS`; `sync()` and a local edit after the wait end it early,
- * and a delete ends a size refusal's wait at once.
+ * and a delete ends a size refusal's wait at once. Each busy answer gets one
+ * retry after `busyRetryMs`, and automatic syncs wait for it, so a Flow ID
+ * that stays busy is retried at that pace; a failed connection retries on the
+ * normal cadence.
  */
 export function synchronizedRuntime(
   session: VaultSession,
@@ -65,6 +82,7 @@ export function synchronizedRuntime(
   let running: Promise<SyncReport> | null = null;
   let followUp: Promise<SyncReport> | null = null;
   let lastStatus: SyncStatus | undefined;
+  let busyRetry: ReturnType<typeof setTimeout> | undefined;
   let backoff: {
     step: number;
     until: number;
@@ -92,6 +110,14 @@ export function synchronizedRuntime(
     const result = await engine.sync();
     const report = { read: result.read };
     if (stopped) return report;
+    if (result.blocked === "busy") {
+      busyRetry = setTimeout(() => {
+        busyRetry = undefined;
+        void synchronize();
+      }, busyRetryMs(result.retryAfter));
+      publish(SYNC_BUSY);
+      return report;
+    }
     const refusal = refusals.get(result.blocked);
     if (refusal) {
       const step = backoff
@@ -115,6 +141,8 @@ export function synchronizedRuntime(
   function synchronize(): Promise<SyncReport> {
     if (stopped) return Promise.resolve({ read: false });
     if (running) return running;
+    clearTimeout(busyRetry);
+    busyRetry = undefined;
     running = coordinate()
       .catch(async (error) => {
         if (error instanceof VaultAccessError) await lockOut();
@@ -127,6 +155,7 @@ export function synchronizedRuntime(
     return running;
   }
   function synchronizeWhenDue() {
+    if (busyRetry !== undefined) return;
     if (backoff && Date.now() < backoff.until) publish(backoff.status);
     else void synchronize();
   }
@@ -158,6 +187,7 @@ export function synchronizedRuntime(
     stopped = true;
     unsubscribe();
     clearInterval(interval);
+    clearTimeout(busyRetry);
     // biome-ignore lint/plugin: Browser lifecycle capability is absent during unit tests.
     if (typeof document !== "undefined")
       document.removeEventListener("visibilitychange", flushOnHide);

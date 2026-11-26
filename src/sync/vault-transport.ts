@@ -300,7 +300,29 @@ const failureReasons = new Map<string, SyncFailure["reason"]>([
   ["CONSENT_REQUIRED", "consent"],
   ["RECONNECT_REQUIRED", "consent"],
   ["ACCOUNT_CHANGED", "consent"],
+  ["CONNECTION_LOST", "connection"],
+  ["UPLOAD_INCOMPLETE", "connection"],
+  ["UPLOAD_BUSY", "busy"],
 ]);
+/** A failure that trying again later may pass: the connection to Flow ID failed, or Flow ID was busy. */
+export type TransientFailure = "connection" | "busy";
+/**
+ * `connection` or `busy` when `error`, an SDK transport error or a
+ * `SyncFailure`, says the connection to Flow ID failed or Flow ID was busy.
+ * Neither is a refusal, so the same request may pass later.
+ */
+export function transientFailure(
+  // biome-ignore lint/plugin: Caught failures are classified here by code or reason.
+  error: unknown,
+): TransientFailure | undefined {
+  const reason =
+    error instanceof SyncFailure
+      ? error.reason
+      : failureReasons.get(
+          z.object({ code: z.string() }).safeParse(error).data?.code ?? "",
+        );
+  return reason === "connection" || reason === "busy" ? reason : undefined;
+}
 export class AuthVaultTransport implements VaultSnapshotTransport {
   readonly version = 2;
   private key: Uint8Array;
@@ -386,6 +408,7 @@ export class AuthVaultTransport implements VaultSnapshotTransport {
       throw new SyncFailure(
         failureReasons.get(code.data.code) ?? "offline",
         "Encrypted sync unavailable",
+        z.object({ retryAfter: z.number() }).safeParse(error).data?.retryAfter,
       );
     }
   }
