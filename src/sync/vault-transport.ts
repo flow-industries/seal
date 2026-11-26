@@ -304,12 +304,13 @@ const failureReasons = new Map<string, SyncFailure["reason"]>([
   ["UPLOAD_INCOMPLETE", "connection"],
   ["UPLOAD_BUSY", "busy"],
 ]);
+/** A failure that trying again later may pass: the connection to Flow ID failed, or Flow ID was busy. */
+export type TransientFailure = "connection" | "busy";
 /**
  * `connection` or `busy` when `error`, an SDK transport error or a
- * `SyncFailure`, says no answer came back or Flow ID was busy. Neither is a
- * refusal, so the same request may pass later.
+ * `SyncFailure`, says the connection to Flow ID failed or Flow ID was busy.
+ * Neither is a refusal, so the same request may pass later.
  */
-export type TransientFailure = "connection" | "busy";
 export function transientFailure(
   // biome-ignore lint/plugin: Caught failures are classified here by code or reason.
   error: unknown,
