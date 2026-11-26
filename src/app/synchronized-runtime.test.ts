@@ -14,15 +14,18 @@ import {
   parseSyncBackoff,
   SYNC_AUTHORIZATION_REQUIRED,
   SYNC_BLOCKED,
+  SYNC_BUSY,
   SYNC_PENDING,
   SYNC_QUOTA_REACHED,
   SYNC_RATE_LIMITED,
   SYNC_TOO_LARGE,
+  SYNC_UNREACHABLE,
   SYNCED,
   type SyncStatus,
   syncBackoffStatus,
 } from "./runtime.ts";
 import {
+  busyRetryMs,
   SYNC_BACKOFF_MS,
   SYNC_INTERVAL_MS,
   synchronizedRuntime,
@@ -753,40 +756,129 @@ for (const [reason, refusal] of [
     }
   });
 
-test("offline failures keep retrying on the normal cadence", async () => {
+for (const [reason, status] of [
+  ["offline", SYNC_BLOCKED],
+  ["connection", SYNC_UNREACHABLE],
+] as const)
+  test(`${reason} failures keep retrying on the normal cadence`, async () => {
+    const key = await createVaultKey();
+    const session = createSession({
+      owner: `did:plc:${reason}-cadence`,
+      vault: crypto.randomUUID(),
+      key,
+    });
+    let uploads = 0;
+    const transport: VaultSnapshotTransport = {
+      version: 2,
+      readSnapshot: async () => null,
+      async writeSnapshot() {
+        uploads++;
+        throw new SyncFailure(reason, "Synthetic outage");
+      },
+    };
+    const start = Date.now();
+    const { runtime, watch, tickAt } = automaticSyncs(() =>
+      synchronizedRuntime(session, async () => transport),
+    );
+    try {
+      await runtime.sync?.();
+      await watch();
+      await runtime.save({
+        id: crypto.randomUUID(),
+        path: "offline.md",
+        kind: "md",
+        source: "waiting for the network",
+      });
+      for (let tick = 0; tick < 4; tick++) {
+        expect(await tickAt(start + tick * SYNC_INTERVAL_MS)).toBe(status);
+        expect(uploads).toBe(tick + 1);
+      }
+    } finally {
+      setSystemTime();
+      runtime.lock();
+      key.fill(0);
+      await session.database.delete();
+    }
+  });
+
+test.each([
+  [undefined, 5_000],
+  [0, 1_000],
+  [7, 7_000],
+  [60, 60_000],
+  [3600, 60_000],
+])("a busy refusal with Retry-After %p waits %p ms", (retryAfter, wait) => {
+  expect(busyRetryMs(retryAfter)).toBe(wait);
+});
+
+test("a busy refusal syncs again once Flow ID's wait passes, and never backs off", async () => {
   const key = await createVaultKey();
   const session = createSession({
-    owner: "did:plc:offline-cadence",
+    owner: "did:plc:busy",
     vault: crypto.randomUUID(),
     key,
   });
+  let snapshot: VaultSnapshot | null = null;
+  let busy = true;
   let uploads = 0;
   const transport: VaultSnapshotTransport = {
     version: 2,
-    readSnapshot: async () => null,
-    async writeSnapshot() {
+    async readSnapshot() {
+      return structuredClone(snapshot);
+    },
+    async writeSnapshot(entries) {
       uploads++;
-      throw new SyncFailure("offline", "Synthetic outage");
+      if (busy) throw new SyncFailure("busy", "Synthetic busy", 7);
+      snapshot = { cid: `cid-${uploads}`, entries: structuredClone(entries) };
+      return { cid: snapshot.cid };
     },
   };
   const start = Date.now();
-  const { runtime, watch, tickAt } = automaticSyncs(() =>
+  const { runtime, next, watch, tickAt } = automaticSyncs(() =>
     synchronizedRuntime(session, async () => transport),
   );
+  const timers = spyOn(globalThis, "setTimeout");
+  const clears = spyOn(globalThis, "clearTimeout");
+  const retries = () =>
+    timers.mock.calls.flatMap(([retry, delay], call) =>
+      delay === 7_000
+        ? [{ retry, handle: timers.mock.results[call]?.value }]
+        : [],
+    );
   try {
-    await runtime.sync?.();
+    await runtime.sync();
     await watch();
-    await runtime.save({
-      id: crypto.randomUUID(),
-      path: "offline.md",
-      kind: "md",
-      source: "waiting for the network",
-    });
-    for (let tick = 0; tick < 4; tick++) {
-      expect(await tickAt(start + tick * SYNC_INTERVAL_MS)).toBe(SYNC_BLOCKED);
-      expect(uploads).toBe(tick + 1);
-    }
+    await runtime.save(pendingNote("busy.md"));
+    expect(await tickAt(start)).toBe(SYNC_BUSY);
+    expect(uploads).toBe(1);
+    expect(retries()).toHaveLength(1);
+
+    // Unlike a rate limit, the next tick uploads again, and its run drops the retry already waiting.
+    expect(await tickAt(start + SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
+    expect(uploads).toBe(2);
+    expect(clears.mock.calls.map(([handle]) => handle)).toContain(
+      retries()[0]?.handle,
+    );
+
+    busy = false;
+    const { retry } = retries()[1] ?? {};
+    // biome-ignore lint/plugin: TimerHandler is a browser union; the runtime registers a function.
+    if (typeof retry === "function") retry();
+    expect(await next()).toBe(SYNCED);
+    expect(uploads).toBe(3);
+    expect(await session.database.outbox.count()).toBe(0);
+
+    // A lock drops a retry still waiting, so nothing outlives the vault.
+    busy = true;
+    await runtime.save(pendingNote("again.md"));
+    expect(await tickAt(start + 2 * SYNC_INTERVAL_MS)).toBe(SYNC_BUSY);
+    const waiting = retries()[2]?.handle;
+    expect(waiting).toBeDefined();
+    runtime.lock();
+    expect(clears.mock.calls.map(([handle]) => handle)).toContain(waiting);
   } finally {
+    timers.mockRestore();
+    clears.mockRestore();
     setSystemTime();
     runtime.lock();
     key.fill(0);

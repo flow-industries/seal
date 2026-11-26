@@ -1,4 +1,9 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import {
+  createNoteDeviceTransport,
+  type NoteDeviceCredentialStore,
+  NoteTransportError,
+} from "@flow-industries/id";
 import Dexie from "dexie";
 import { IDBKeyRange, indexedDB } from "fake-indexeddb";
 import { z } from "zod";
@@ -21,6 +26,7 @@ import {
 import { createVaultKey } from "../crypto/index.ts";
 import { createSession } from "../vault/session.ts";
 import { VaultDatabase } from "../vault/storage.ts";
+import { SyncFailure } from "./records.ts";
 import { VaultSyncEngine } from "./vault-engine.ts";
 import {
   decodeSnapshot,
@@ -30,6 +36,7 @@ import {
 } from "./vault-snapshot.ts";
 import {
   AuthVaultTransport,
+  failureReason,
   staysJournal,
   type VaultRecordV2,
   type VaultTransportRpc,
@@ -386,6 +393,9 @@ test.each([
   ["QUOTA", "quota"],
   ["RATE_LIMITED", "rate-limited"],
   ["PDS_UNAVAILABLE", "offline"],
+  ["CONNECTION_LOST", "connection"],
+  ["UPLOAD_INCOMPLETE", "connection"],
+  ["UPLOAD_BUSY", "busy"],
 ])("an upload refused with %s is a %s sync failure", async (code, reason) => {
   const f = await fixture();
   const adapter = new AuthVaultTransport(f.rpc, { ...f, ...f.state });
@@ -398,6 +408,94 @@ test.each([
   expect(f.puts).toBe(0);
   adapter.stop();
   f.key.fill(0);
+});
+
+describe("through the device transport", () => {
+  const credentials: NoteDeviceCredentialStore = {
+    read: async () => ({
+      accessToken: "fnd_test",
+      refreshToken: "fndr_test",
+      deviceId: "device",
+      userId: "user",
+      did: "did:plc:transport",
+      accessExpiresAt: Date.now() + 3_600_000,
+    }),
+    write: async () => {},
+  };
+  test.each([
+    [
+      "no answer at all",
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      "connection",
+      undefined,
+    ],
+    [
+      "a stalled upload",
+      () => Response.json({ code: "UPLOAD_INCOMPLETE" }, { status: 408 }),
+      "connection",
+      undefined,
+    ],
+    [
+      "too many uploads, wait 7 s",
+      () =>
+        Response.json(
+          { code: "UPLOAD_BUSY" },
+          { status: 429, headers: { "Retry-After": "7" } },
+        ),
+      "busy",
+      7,
+    ],
+    [
+      "too many uploads, no wait given",
+      () => Response.json({ code: "UPLOAD_BUSY" }, { status: 429 }),
+      "busy",
+      undefined,
+    ],
+    [
+      "a rate limit, whatever wait it gives",
+      () =>
+        Response.json(
+          { code: "RATE_LIMITED" },
+          { status: 429, headers: { "Retry-After": "30" } },
+        ),
+      "rate-limited",
+      undefined,
+    ],
+  ] as const)(
+    "%s is a %s sync failure, with Flow ID's wait only when busy",
+    async (_, answer, reason, retryAfter) => {
+      const f = await fixture();
+      const device = createNoteDeviceTransport("https://id.test", credentials, {
+        fetch: async () => answer(),
+      });
+      const adapter = new AuthVaultTransport(
+        { ...f.rpc, upload: (bytes) => device.upload(bytes) },
+        { ...f, ...f.state },
+      );
+      const failure = await adapter
+        .writeSnapshot([], null)
+        .catch((error) => error);
+      expect(failure).toBeInstanceOf(SyncFailure);
+      expect(failure).toMatchObject({ reason, retryAfter });
+      expect(failureReason(failure)).toBe(reason);
+      expect(f.puts).toBe(0);
+      adapter.stop();
+      f.key.fill(0);
+    },
+  );
+});
+
+test.each([
+  [new NoteTransportError("CONNECTION_LOST", 0), "connection"],
+  [new NoteTransportError("UPLOAD_INCOMPLETE", 408), "connection"],
+  [new NoteTransportError("UPLOAD_BUSY", 429, 7), "busy"],
+  [{ code: "QUOTA", status: 413 }, "quota"],
+  [new SyncFailure("too-large", "Notepad too large to sync"), "too-large"],
+  [new NoteTransportError("DEVICE_LINKING_DISABLED", 403), undefined],
+  [new Error("CONNECTION_LOST"), undefined],
+  [null, undefined],
+])("failureReason reads %p as %p", (error, reason) => {
+  expect(failureReason(error)).toBe(reason);
 });
 
 test.each([

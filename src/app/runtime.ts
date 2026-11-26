@@ -122,6 +122,10 @@ export const SYNC_LOCKED = "Your notepad changed. Unlock again.";
 export const SYNCED = "Synced";
 export const SYNC_PENDING = "Saved locally · Sync pending";
 export const SYNC_BLOCKED = "Saved locally · Sync blocked";
+/** No complete answer came back from Flow ID; sync tries again on its usual cadence. */
+export const SYNC_UNREACHABLE = "Saved locally · Couldn’t reach Flow ID";
+/** Flow ID had too many uploads in flight; sync tries again within a minute. */
+export const SYNC_BUSY = "Saved locally · Syncing again in a moment";
 export const SYNC_QUOTA_REACHED = "Saved locally · PDS quota reached";
 export const SYNC_RATE_LIMITED = "Saved locally · PDS upload limit reached";
 export const SYNC_TOO_LARGE = "Saved locally · Notepad too large to sync";
@@ -190,6 +194,8 @@ export type SyncStatus =
   | typeof SYNCED
   | typeof SYNC_PENDING
   | typeof SYNC_BLOCKED
+  | typeof SYNC_UNREACHABLE
+  | typeof SYNC_BUSY
   | SyncBackoffStatus
   | typeof SYNC_AUTHORIZATION_REQUIRED;
 

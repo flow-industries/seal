@@ -18,11 +18,13 @@ export {
   type StrandedEdits,
   SYNC_AUTHORIZATION_REQUIRED,
   SYNC_BLOCKED,
+  SYNC_BUSY,
   SYNC_LOCKED,
   SYNC_PENDING,
   SYNC_QUOTA_REACHED,
   SYNC_RATE_LIMITED,
   SYNC_TOO_LARGE,
+  SYNC_UNREACHABLE,
   SYNCED,
   type SyncListener,
   type SyncReport,
@@ -53,6 +55,8 @@ export {
   PUBLISH_WAIT_MS,
   type WriteOptions,
 } from "./device/client.ts";
+export type { SyncFailureReason } from "./sync/records.ts";
+export { failureReason } from "./sync/vault-transport.ts";
 export type {
   MoveOptions,
   RevisionBase,

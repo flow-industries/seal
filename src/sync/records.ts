@@ -19,6 +19,11 @@ export interface RemoteRecord {
   cid: string;
   record: EncryptedRecord;
 }
+/**
+ * Why a sync stopped short. `connection`: no complete answer came back, and a
+ * write may still have landed. `busy`: Flow ID had too many uploads in flight,
+ * which clears in seconds. `offline`: any other failure worth retrying.
+ */
 export class SyncFailure extends Error {
   readonly reason:
     | "conflict"
@@ -26,9 +31,19 @@ export class SyncFailure extends Error {
     | "rate-limited"
     | "too-large"
     | "consent"
+    | "connection"
+    | "busy"
     | "offline";
-  constructor(reason: SyncFailure["reason"], message: string) {
+  /** Seconds Flow ID asked to wait before retrying a `busy` refusal, when it said. */
+  readonly retryAfter: number | undefined;
+  constructor(
+    reason: SyncFailure["reason"],
+    message: string,
+    retryAfter?: number,
+  ) {
     super(message);
     this.reason = reason;
+    this.retryAfter = retryAfter;
   }
 }
+export type SyncFailureReason = SyncFailure["reason"];
