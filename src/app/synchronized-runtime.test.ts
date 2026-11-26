@@ -15,11 +15,11 @@ import {
   SYNC_AUTHORIZATION_REQUIRED,
   SYNC_BLOCKED,
   SYNC_BUSY,
+  SYNC_CONNECTION_FAILED,
   SYNC_PENDING,
   SYNC_QUOTA_REACHED,
   SYNC_RATE_LIMITED,
   SYNC_TOO_LARGE,
-  SYNC_UNREACHABLE,
   SYNCED,
   type SyncStatus,
   syncBackoffStatus,
@@ -763,7 +763,7 @@ for (const [reason, refusal] of [
 
 for (const [reason, status] of [
   ["offline", SYNC_BLOCKED],
-  ["connection", SYNC_UNREACHABLE],
+  ["connection", SYNC_CONNECTION_FAILED],
 ] as const)
   test(`${reason} failures keep retrying on the normal cadence`, async () => {
     const key = await createVaultKey();

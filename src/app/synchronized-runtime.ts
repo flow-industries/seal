@@ -11,12 +11,12 @@ import {
   SYNC_AUTHORIZATION_REQUIRED,
   SYNC_BLOCKED,
   SYNC_BUSY,
+  SYNC_CONNECTION_FAILED,
   SYNC_LOCKED,
   SYNC_PENDING,
   SYNC_QUOTA_REACHED,
   SYNC_RATE_LIMITED,
   SYNC_TOO_LARGE,
-  SYNC_UNREACHABLE,
   SYNCED,
   type SyncBackoffStatus,
   type SyncListener,
@@ -50,7 +50,7 @@ const refusals = new Map<SyncResult["blocked"], SyncRefusal>([
 
 function syncStatus(blocked: SyncResult["blocked"], pending: number) {
   if (blocked === "consent") return SYNC_AUTHORIZATION_REQUIRED;
-  if (blocked === "connection") return SYNC_UNREACHABLE;
+  if (blocked === "connection") return SYNC_CONNECTION_FAILED;
   if (blocked) return SYNC_BLOCKED;
   return pending ? SYNC_PENDING : SYNCED;
 }
@@ -61,9 +61,10 @@ function syncStatus(blocked: SyncResult["blocked"], pending: number) {
  * After access loss the key is wiped within `flushLimit` ms, saved or not.
  * A quota, rate-limit or size refusal stops automatic syncs, and so every upload,
  * for `SYNC_BACKOFF_MS`; `sync()` and a local edit after the wait end it early,
- * and a delete ends a size refusal's wait at once. A busy Flow ID gets one
- * retry after `busyRetryMs`, and automatic syncs wait for it; a lost
- * connection retries on the normal cadence.
+ * and a delete ends a size refusal's wait at once. Each busy answer gets one
+ * retry after `busyRetryMs`, and automatic syncs wait for it, so a Flow ID
+ * that stays busy is retried at that pace; a failed connection retries on the
+ * normal cadence.
  */
 export function synchronizedRuntime(
   session: VaultSession,

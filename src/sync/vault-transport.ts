@@ -309,10 +309,11 @@ const failureReasons = new Map<string, SyncFailure["reason"]>([
  * `SyncFailure`, says no answer came back or Flow ID was busy. Neither is a
  * refusal, so the same request may pass later.
  */
+export type TransientFailure = "connection" | "busy";
 export function transientFailure(
   // biome-ignore lint/plugin: Caught failures are classified here by code or reason.
   error: unknown,
-): "connection" | "busy" | undefined {
+): TransientFailure | undefined {
   const reason =
     error instanceof SyncFailure
       ? error.reason

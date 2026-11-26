@@ -127,14 +127,24 @@ export const SYNC_RATE_LIMITED = "Saved locally · PDS upload limit reached";
 export const SYNC_TOO_LARGE = "Saved locally · Notepad too large to sync";
 export const SYNC_AUTHORIZATION_REQUIRED =
   "Saved locally · Sync needs authorization";
-/** No complete answer came back from Flow ID; the cause may be on either side. Sync keeps its normal cadence. */
-export const SYNC_UNREACHABLE = "Saved locally · Couldn’t reach Flow ID";
-/** Flow ID has too many uploads in flight for this account; sync tries once more after its short wait. */
+/** No complete answer came back from Flow ID, or Flow ID stopped receiving the request; the cause may be on either side. Sync keeps its normal cadence. */
+export const SYNC_CONNECTION_FAILED =
+  "Saved locally · Connection to Flow ID failed";
+/** Flow ID has too many uploads in flight for this account; each such answer gets one retry after its short wait. */
 export const SYNC_BUSY = "Saved locally · Syncing again in a moment";
-/** What an unlock or a link says after a `transientFailure`. The cause may be on either side, so neither blames the person's connection. */
+/**
+ * Why a request didn't go through, after a `transientFailure`. "Connection"
+ * covers both a lost answer and an upload Flow ID stopped receiving, and the
+ * cause may be on either side, so neither line blames the person's network.
+ */
+export const TRANSIENT_CAUSES = {
+  connection: "The connection to Flow ID failed.",
+  busy: "Flow ID is busy with other uploads from your account.",
+} as const;
+/** What an unlock or a link says after a `transientFailure`. */
 export const TRANSIENT_FAILURES = {
-  connection: "Couldn’t reach Flow ID. Try again in a moment.",
-  busy: "Flow ID is busy with other uploads from your account. Try again in a moment.",
+  connection: `${TRANSIENT_CAUSES.connection} Try again in a moment.`,
+  busy: `${TRANSIENT_CAUSES.busy} Try again in a moment.`,
 } as const;
 
 /** A refusal that sync waits out before trying on its own again. */
@@ -199,7 +209,7 @@ export type SyncStatus =
   | typeof SYNCED
   | typeof SYNC_PENDING
   | typeof SYNC_BLOCKED
-  | typeof SYNC_UNREACHABLE
+  | typeof SYNC_CONNECTION_FAILED
   | typeof SYNC_BUSY
   | SyncBackoffStatus
   | typeof SYNC_AUTHORIZATION_REQUIRED;
